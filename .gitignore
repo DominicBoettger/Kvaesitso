@@ -296,3 +296,9 @@ fabric.properties
 .idea/studiobot.xml
 
 .kotlin
+# Local opencode config (machine-specific paths, personal agent setup)
+opencode.json
+.opencode/
+
+# Local reference material
+4EA31AE5-*.png
