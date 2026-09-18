@@ -39,11 +39,15 @@ Run on emulator/device (and partially via Robolectric):
 - fixed test wallpaper, fixed clock, golden images of the home grid in the glass
   style; catches Compose/rendering regressions that L1/L2 cannot see (ADR 0004).
 
-### L4 — End-to-end, in the provisioning repo
+### L4 — End-to-end, in `e2e/` of this repo
 
-The acceptance harness for AI-driven development, reusing the existing GrapheneOS
-emulator infrastructure — on a **dedicated second emulator instance** so test runs
-never interfere with the interactively used one:
+The acceptance harness for AI-driven development. The **scenarios live in this
+repo** (`e2e/`) because they change with launcher features (config schema,
+read-back provider) and are part of a PR's definition of done. The **instance
+harness** (emulator start/stop, snapshots, qcow2 overlays, device lock) stays
+in the provisioning repo (`~/Development/GrapheneOS/emulator/`) and is invoked
+as a script interface — on a **dedicated second emulator instance** so test
+runs never interfere with the interactively used one:
 
 - separate instance on port 5556 (`emulator-5556`); the GrapheneOS emulator runs
   from the build tree (`out/target/product/emu64x/`) without SDK AVDs, so the test

@@ -40,6 +40,9 @@ ktor = "3.5.2"
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
+androidx-test = "1.7.0"
+robolectric = "4.17"
+roborazzi = "1.74.0"
 
 osmOpeningHours = "0.4.0"
 
@@ -119,6 +122,17 @@ koin-androidxcompose = { group = "io.insert-koin", name = "koin-androidx-compose
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidx-test" }
+androidx-test-rules = { group = "androidx.test", name = "rules", version.ref = "androidx-test" }
+androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidx-test" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "androidx-room" }
+androidx-room-common = { group = "androidx.room", name = "room-common", version.ref = "androidx-room" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4", version.ref = "androidx-compose" }
+androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest", version.ref = "androidx-compose" }
+roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
 
 osmopeninghours = { group = "de.westnordost", name = "osm-opening-hours", version.ref = "osmOpeningHours" }
 
@@ -138,3 +152,4 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-plugin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 dokka = { id = "org.jetbrains.dokka", version = "2.2.0" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }

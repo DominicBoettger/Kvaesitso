@@ -1,0 +1,71 @@
+name: Tests
+
+# L1 (unit) + L3 (screenshot verify) on every push and PR.
+# L2 (Compose UI on emulator) on PRs only — it is the slow layer.
+# L4 stays manual/local: it needs the self-built GrapheneOS emulator (ADR 0005).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  l1-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests
+        run: >-
+          ./gradlew
+          :core:preferences:testDebugUnitTest
+          :services:backup:testDebugUnitTest
+          :data:database:testDebugUnitTest
+          :core:base:testDebugUnitTest
+          :data:locations:testDebugUnitTest
+
+  l3-screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Verify screenshot goldens
+        run: ./gradlew :app:ui:verifyRoborazziDebug
+      - name: Upload diff artifacts on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: roborazzi-diff
+          path: |
+            app/ui/src/test/roborazzi
+            app/ui/build/outputs/roborazzi
+          retention-days: 14
+
+  l2-compose-ui:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compose UI tests on stock emulator (API 36)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          script: ./gradlew :app:ui:connectedDebugAndroidTest

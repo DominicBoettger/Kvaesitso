@@ -36,7 +36,35 @@ afterthought (see `docs/architecture/adr/0005-testing-strategy.md`):
 - Coverage is measured on fork-touched modules only; untouched upstream code
   staying untested is accepted.
 - Definition of done: unit + Compose tests green; for config/provisioning-facing
-  features, the L4 scenario in the provisioning repo updated and green.
+  features, the L4 scenario in `e2e/` (driven against the provisioning repo's
+  emulator harness) updated and green.
+
+## Test harness (Phase 1)
+
+- **L1 unit tests**: JUnit4 + Robolectric 4.17 (SDK 36/37 supported; needs the
+  `--add-opens` JVM args already wired in the module build files — copy that
+  `tasks.withType<Test>` block when adding tests to another module). Modules
+  with test wiring so far: `:core:preferences`, `:services:backup`,
+  `:data:database`, `:app:ui`.
+- **L3 screenshot tests**: Roborazzi in `:app:ui`; goldens are committed under
+  `app/ui/src/test/roborazzi/`.
+  - record: `./gradlew :app:ui:recordRoborazziDebug`
+  - verify: `./gradlew :app:ui:verifyRoborazziDebug`
+- **L2 Compose UI tests**: `androidTest` in `:app:ui`, run on a stock API 36
+  emulator (`:app:ui:connectedDebugAndroidTest`).
+- **Room migrations**: `:data:database` exports schemas via KSP
+  (`schemas/…/<version>.json`); `MigrationTest` validates the full chain and is
+  the template for new migrations. When bumping the DB version: write the
+  migration, extend `MigrationTest.allMigrations`, run
+  `:data:database:kspDebugKotlin` once to export the new schema JSON, commit it.
+- **L4**: `e2e/l4-smoke.sh` (and future scenarios) — see the emulator section
+  below.
+
+## CI
+
+`.github/workflows/test.yml`: L1 + L3 on every push/PR (JDK 21 — Robolectric
+with SDK 36+ requires >= 21), L2 on PRs via `android-emulator-runner` (stock
+API 36 image). L4 stays manual/local.
 
 ## Fork conventions
 
