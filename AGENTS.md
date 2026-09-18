@@ -74,6 +74,30 @@ API 36 image). L4 stays manual/local.
   inner display). minSdk 36. Old-Android compat code is deleted, not maintained.
 - No Play Services dependencies, no telemetry.
 
+## Security
+
+This fork is a **launcher whose primary target is GrapheneOS**, so it is held to
+high security standards. A launcher runs with elevated trust on the device
+(home-screen role, app launching, widget hosting, potentially provisioning
+data), and GrapheneOS users expect software that does not erode the platform's
+guarantees. Treat security as a design constraint, not a checklist item:
+
+- **Least privilege**: request no permissions beyond what a feature strictly
+  needs; never weaken existing sandboxing, signature checks, or SELinux-related
+  behavior to make something work.
+- **Data protection**: user data and provisioning/config data must never leak
+  — no plain-text secrets, no sensitive data in logs, no world-readable files,
+  no unprotected exported components. Treat config/provisioning payloads as
+  untrusted input: validate and sanitize everything that is parsed.
+- **Attack surface**: keep exported activities/services/providers/receivers
+  minimal and explicitly permission-guarded; be conservative with IPC, deep
+  links, `WebView` usage, and dynamic code loading.
+- **Dependencies**: no new third-party dependencies without clear justification;
+  no closed-source blobs, no trackers, no Play Services, no telemetry (see fork
+  conventions).
+- **When in doubt, ask**: if a change could weaken the security posture —
+  even indirectly — flag it explicitly instead of merging it silently.
+
 ## Emulator (GrapheneOS, self-built)
 
 The test target is a self-built GrapheneOS emulator (`~/android/grapheneos`,
