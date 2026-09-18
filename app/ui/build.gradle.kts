@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.plugin.serialization)
     alias(libs.plugins.kotlin.plugin.compose)
+    alias(libs.plugins.roborazzi)
 }
 
 android {
@@ -67,6 +68,11 @@ android {
     lint {
         abortOnError = false
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     namespace = "de.mm20.launcher2.ui"
 }
 
@@ -153,4 +159,37 @@ dependencies {
     implementation(project(":services:favorites"))
     implementation(project(":services:feed"))
     implementation(project(":core:devicepose"))
+
+    testImplementation(libs.bundles.tests)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+}
+
+// Screenshot goldens live in the source tree so they are committed and CI can
+// verify against them.
+roborazzi {
+    outputDir.set(file("src/test/roborazzi"))
+}
+
+// Robolectric on JDK 17+ (https://robolectric.org/getting-started/)
+tasks.withType<Test>().configureEach {
+    jvmArgs(
+        "--add-opens=java.base/java.io=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.net=ALL-UNNAMED",
+        "--add-opens=java.base/java.security=ALL-UNNAMED",
+        "--add-opens=java.base/java.text=ALL-UNNAMED",
+        "--add-opens=java.base/java.util=ALL-UNNAMED",
+        "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+        "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED",
+        "--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+    )
 }
