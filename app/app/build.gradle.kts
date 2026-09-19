@@ -35,21 +35,37 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = System.getenv("VERSION_CODE_OVERRIDE")?.toIntOrNull() ?: 2026091500
-        versionName = "1.41.0"
+        // Releases take their version from the git tag (.github/workflows/release.yml).
+        versionName = System.getenv("VERSION_NAME_OVERRIDE") ?: "0.1.0-dev"
         signingConfig = signingConfigs.getByName("debug")
     }
 
+    // Release signing (ADR 0006): the organization's key, provided by the
+    // environment. In CI the keystore is decoded to $RUNNER_TEMP/keystore;
+    // locally set KEYSTORE_PATH. Without these variables a release build comes
+    // out unsigned (not installable) rather than silently signed with the
+    // debug key.
+    val releaseKeystore = System.getenv("KEYSTORE_PATH")
+        ?: System.getenv("RUNNER_TEMP")?.let { "$it/keystore/keystore.jks" }
+    val releaseSigningAvailable = releaseKeystore != null &&
+            file(releaseKeystore).exists() &&
+            System.getenv("KEYSTORE_PASSWORD") != null &&
+            System.getenv("SIGNING_KEY_ALIAS") != null
+
     signingConfigs {
         create("gh-actions") {
-            storeFile = file("${System.getenv("RUNNER_TEMP")}/keystore/keystore.jks")
-            storePassword = System.getenv("KEYSTORE_PASSWORD")
-            keyAlias = System.getenv("SIGNING_KEY_ALIAS")
-            keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+            if (releaseSigningAvailable) {
+                storeFile = file(releaseKeystore!!)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD")
+            }
         }
     }
 
     buildTypes {
         release {
+            signingConfig = if (releaseSigningAvailable) signingConfigs.getByName("gh-actions") else null
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
