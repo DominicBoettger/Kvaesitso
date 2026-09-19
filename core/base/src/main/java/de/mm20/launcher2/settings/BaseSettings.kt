@@ -40,6 +40,12 @@ abstract class BaseSettings<T>(
         }
     }
 
+    // Fork addition (Phase 2): awaited write, so config reload can read back
+    // the written state immediately.
+    protected suspend fun updateDataAndAwait(block: suspend (T) -> T): T {
+        return context.dataStore.updateData(block)
+    }
+
     override suspend fun backup(toDir: File) {
         val data = context.dataStore.data.first()
         val file = File(toDir, fileName)

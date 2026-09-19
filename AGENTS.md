@@ -9,6 +9,14 @@ Read `docs/architecture/README.md` and the ADRs before changing anything.
 messages, docs, ADRs, test names — no exceptions. Chat with the user may be
 German; artifacts never are.
 
+## Commits
+
+No AI-attribution in commits. Never add "Co-Authored-By", "Generated with
+[tool]" footers, robot emojis, or any other signature/attribution line to a
+commit message — this is the default behavior of some tools (Claude Code in
+particular) and must be suppressed. A commit message reads exactly like one a
+human engineer wrote: subject line + body, nothing else, no exceptions.
+
 ## Feedback loop (no LSP)
 
 LSP is deliberately disabled for this project: Kotlin language servers on a

@@ -1,6 +1,8 @@
 package de.mm20.launcher2.preferences
 
 import de.mm20.launcher2.backup.Backupable
+import de.mm20.launcher2.preferences.config.LauncherConfigSettings
+import de.mm20.launcher2.preferences.config.LauncherConfigSettingsImpl
 import de.mm20.launcher2.preferences.feed.FeedSettings
 import de.mm20.launcher2.preferences.search.ContactSearchSettings
 import de.mm20.launcher2.preferences.media.MediaSettings
@@ -54,4 +56,7 @@ val preferencesModule = module {
     factory { SearchFilterSettings(get()) }
     factory { LocaleSettings(get()) }
     factory { FeedSettings(get()) }
+    // Fork addition (Phase 2): config reload settings gateway, consumed by
+    // :services:config.
+    factory<LauncherConfigSettings> { LauncherConfigSettingsImpl(get()) }
 }

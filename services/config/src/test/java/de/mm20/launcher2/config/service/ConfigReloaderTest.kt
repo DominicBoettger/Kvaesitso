@@ -1,0 +1,208 @@
+package de.mm20.launcher2.config.service
+
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import de.mm20.launcher2.config.ConfigMutation
+import de.mm20.launcher2.config.ConfigState
+import de.mm20.launcher2.config.Diagnostic
+import de.mm20.launcher2.config.Severity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.io.File
+import java.util.Collections
+
+@RunWith(RobolectricTestRunner::class)
+class ConfigReloaderTest {
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    private class FakeConfigStore(
+        var state: ConfigState = ConfigState(),
+        var applyDiagnostics: List<Diagnostic> = emptyList(),
+        var applyDelayMs: Long = 0,
+    ) : ConfigStore {
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        var applyCount = 0
+
+        override suspend fun readState(): ConfigState {
+            events += "read"
+            return state
+        }
+
+        override suspend fun apply(mutations: List<ConfigMutation>): List<Diagnostic> {
+            applyCount++
+            events += "apply:${mutations.map { it.section }}"
+            if (applyDelayMs > 0) delay(applyDelayMs)
+            return applyDiagnostics
+        }
+    }
+
+    private fun newReloader(store: FakeConfigStore): Pair<ConfigReloader, ReloadReportStore> {
+        val reportStore = ReloadReportStore(context)
+        return ConfigReloader(store, reportStore) to reportStore
+    }
+
+    @Test
+    fun `valid config applies diff and persists successful report`() = runTest {
+        val store = FakeConfigStore()
+        val (reloader, reportStore) = newReloader(store)
+
+        val report = reloader.reload("""{"schemaVersion": 1, "icons": {"themed": true}}""")
+
+        assertTrue(report.success)
+        assertEquals(1, report.schemaVersion)
+        assertEquals(listOf("icons"), report.appliedMutations)
+        assertEquals(listOf("read", "apply:[icons]"), store.events)
+        assertEquals(report, reportStore.read())
+    }
+
+    @Test
+    fun `malformed input does not apply`() = runTest {
+        val store = FakeConfigStore()
+        val (reloader, _) = newReloader(store)
+
+        val report = reloader.reload("""{"schemaVersion": 1, "icons": """)
+
+        assertFalse(report.success)
+        assertTrue(report.diagnostics.any { it.code == "malformed-json" && it.severity == Severity.Error })
+        assertEquals(0, store.applyCount)
+    }
+
+    @Test
+    fun `validation errors do not apply`() = runTest {
+        val store = FakeConfigStore()
+        val (reloader, _) = newReloader(store)
+
+        val report = reloader.reload(
+            """{"schemaVersion": 1, "appearance": {"transparency": {"background": 2.0}}}"""
+        )
+
+        assertFalse(report.success)
+        assertTrue(report.diagnostics.any { it.code == "invalid-transparency" && it.severity == Severity.Error })
+        assertEquals(0, store.applyCount)
+    }
+
+    @Test
+    fun `unknown key warning does not fail the reload`() = runTest {
+        val store = FakeConfigStore()
+        val (reloader, _) = newReloader(store)
+
+        val report = reloader.reload(
+            """{"schemaVersion": 1, "icons": {"themed": true}, "nonsense": 42}"""
+        )
+
+        assertTrue(report.success)
+        assertTrue(report.diagnostics.any { it.code == "unknown-key" && it.severity == Severity.Warning })
+        assertEquals(listOf("icons"), report.appliedMutations)
+        assertEquals(1, store.applyCount)
+    }
+
+    @Test
+    fun `no-op diff writes a successful empty report`() = runTest {
+        val store = FakeConfigStore(state = ConfigState(themedIcons = true))
+        val (reloader, _) = newReloader(store)
+
+        val report = reloader.reload("""{"schemaVersion": 1, "icons": {"themed": true}}""")
+
+        assertTrue(report.success)
+        assertEquals(emptyList<String>(), report.appliedMutations)
+        assertEquals(emptyList<Diagnostic>(), report.diagnostics)
+        assertEquals(listOf("read", "apply:[]"), store.events)
+    }
+
+    @Test
+    fun `apply error diagnostics make the report unsuccessful and exclude the section`() = runTest {
+        val store = FakeConfigStore(
+            applyDiagnostics = listOf(
+                Diagnostic(Severity.Error, "favorite-unavailable", "home.dock.favorites[0]", "not installed"),
+            )
+        )
+        val (reloader, _) = newReloader(store)
+
+        val report = reloader.reload(
+            """{"schemaVersion": 1, "icons": {"themed": true}, "home": {"dock": {"favorites": [{"packageName": "com.example.app"}]}}}"""
+        )
+
+        assertFalse(report.success)
+        assertEquals(listOf("icons"), report.appliedMutations)
+        assertTrue(report.diagnostics.any { it.code == "favorite-unavailable" })
+    }
+
+    @Test
+    fun `apply warning diagnostics keep the report successful`() = runTest {
+        val store = FakeConfigStore(
+            applyDiagnostics = listOf(
+                Diagnostic(Severity.Warning, "unsupported-widget", "home.widgets.widgets", "kept"),
+            )
+        )
+        val (reloader, _) = newReloader(store)
+
+        val report = reloader.reload(
+            """{"schemaVersion": 1, "home": {"widgets": {"widgets": ["weather"]}}}"""
+        )
+
+        assertTrue(report.success)
+        assertEquals(listOf("home.widgets.widgets"), report.appliedMutations)
+    }
+
+    @Test
+    fun `concurrent reloads do not interleave`() = runBlocking {
+        val store = FakeConfigStore(applyDelayMs = 100)
+        val (reloader, _) = newReloader(store)
+
+        val icons = """{"schemaVersion": 1, "icons": {"themed": true}}"""
+        val dock = """{"schemaVersion": 1, "home": {"dock": {"enabled": true}}}"""
+
+        val reports = listOf(icons, dock).map { text ->
+            async(Dispatchers.Default) { reloader.reload(text) }
+        }.awaitAll()
+
+        assertTrue(reports.all { it.success })
+        val events = store.events.toList()
+        assertEquals(4, events.size)
+        // Each reload must complete read+apply before the next one starts.
+        assertEquals("read", events[0])
+        assertTrue(events[1].startsWith("apply:"))
+        assertEquals("read", events[2])
+        assertTrue(events[3].startsWith("apply:"))
+        // Both reloads were applied exactly once.
+        assertEquals(setOf("apply:[icons]", "apply:[home.dock.enabled]"), setOf(events[1], events[3]))
+    }
+
+    @Test
+    fun `reload from file reads and applies`() = runTest {
+        val store = FakeConfigStore()
+        val (reloader, _) = newReloader(store)
+        val file = File(context.filesDir, "test-config.json")
+        file.writeText("""{"schemaVersion": 1, "icons": {"themed": true}}""")
+        try {
+            val report = reloader.reload(file)
+            assertTrue(report.success)
+            assertEquals(listOf("icons"), report.appliedMutations)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun `reload from missing file fails without applying`() = runTest {
+        val store = FakeConfigStore()
+        val (reloader, _) = newReloader(store)
+
+        val report = reloader.reload(File(context.filesDir, "does-not-exist.json"))
+
+        assertFalse(report.success)
+        assertTrue(report.diagnostics.any { it.code == "read-failed" && it.severity == Severity.Error })
+        assertEquals(0, store.applyCount)
+    }
+}

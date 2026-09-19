@@ -23,8 +23,13 @@ jobs:
         run: >-
           ./gradlew
           :core:preferences:testDebugUnitTest
+          :core:config:testDebugUnitTest
           :services:backup:testDebugUnitTest
+          :services:config:testDebugUnitTest
           :data:database:testDebugUnitTest
+          :data:searchable:testDebugUnitTest
+          :data:widgets:testDebugUnitTest
+          :data:themes:testDebugUnitTest
           :core:base:testDebugUnitTest
           :data:locations:testDebugUnitTest
 
@@ -61,6 +66,14 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
       - uses: gradle/actions/setup-gradle@v4
+      # GitHub's Linux runners support KVM but keep /dev/kvm root-only. Without
+      # this the emulator runs with -accel off: API 36 took 505 s to boot and
+      # then hung before the first test (two PR runs on 2026-09-19).
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: Compose UI tests on stock emulator (API 36)
         uses: reactivecircus/android-emulator-runner@v2
         with:

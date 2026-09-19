@@ -128,6 +128,7 @@ dependencies {
     implementation(project(":core:base"))
     implementation(project(":data:calculator"))
     implementation(project(":data:calendar"))
+    implementation(project(":services:config")) // Fork addition (Phase 2)
     implementation(project(":data:contacts"))
     implementation(project(":core:crashreporter"))
     implementation(project(":data:currencies"))

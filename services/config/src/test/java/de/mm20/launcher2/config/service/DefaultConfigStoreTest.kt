@@ -1,0 +1,603 @@
+package de.mm20.launcher2.config.service
+
+import android.content.ComponentName
+import android.content.Context
+import android.os.Bundle
+import android.os.Parcel
+import android.os.Process
+import android.os.UserHandle
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import de.mm20.launcher2.applications.AppRepository
+import de.mm20.launcher2.config.BuiltinWidget
+import de.mm20.launcher2.config.ClockStyle
+import de.mm20.launcher2.config.ConfigMutation
+import de.mm20.launcher2.config.ConfigState
+import de.mm20.launcher2.config.Diagnostic
+import de.mm20.launcher2.config.Favorite
+import de.mm20.launcher2.config.Severity
+import de.mm20.launcher2.database.AppDatabase
+import de.mm20.launcher2.icons.StaticLauncherIcon
+import de.mm20.launcher2.preferences.config.LauncherConfigSettings
+import de.mm20.launcher2.preferences.config.SettingsBackedState
+import de.mm20.launcher2.profiles.Profile
+import de.mm20.launcher2.search.Application
+import de.mm20.launcher2.search.SavableSearchable
+import de.mm20.launcher2.search.SearchableSerializer
+import de.mm20.launcher2.searchable.PinnedLevel
+import de.mm20.launcher2.searchable.SavableSearchableRepository
+import de.mm20.launcher2.searchable.VisibilityLevel
+import de.mm20.launcher2.themes.DefaultThemeId
+import de.mm20.launcher2.themes.R
+import de.mm20.launcher2.themes.transparencies.Transparencies
+import de.mm20.launcher2.themes.transparencies.TransparenciesRepository
+import de.mm20.launcher2.widgets.AppWidget
+import de.mm20.launcher2.widgets.AppWidgetConfig
+import de.mm20.launcher2.widgets.CalendarWidget
+import de.mm20.launcher2.widgets.NotesWidget
+import de.mm20.launcher2.widgets.NotesWidgetConfig
+import de.mm20.launcher2.widgets.WeatherWidget
+import de.mm20.launcher2.widgets.Widget
+import de.mm20.launcher2.widgets.WidgetRepository
+import kotlinx.collections.immutable.persistentListOf
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.io.File
+import java.util.UUID
+import de.mm20.launcher2.config.Profile as ConfigProfile
+
+@RunWith(RobolectricTestRunner::class)
+class DefaultConfigStoreTest {
+
+    private lateinit var context: Context
+    private lateinit var database: AppDatabase
+    private lateinit var transparenciesRepository: TransparenciesRepository
+    private lateinit var settings: FakeLauncherConfigSettings
+    private lateinit var widgetRepository: FakeWidgetRepository
+    private lateinit var searchableRepository: FakeSavableSearchableRepository
+    private lateinit var appRepository: FakeAppRepository
+    private lateinit var profileResolver: FakeProfileResolver
+    private lateinit var store: DefaultConfigStore
+
+    private val personalHandle: UserHandle = Process.myUserHandle()
+    private val workHandle: UserHandle = userHandleFor(10)
+
+    @Before
+    fun setUp() {
+        context = ApplicationProvider.getApplicationContext()
+        database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        transparenciesRepository = TransparenciesRepository(context, database)
+        settings = FakeLauncherConfigSettings()
+        widgetRepository = FakeWidgetRepository()
+        searchableRepository = FakeSavableSearchableRepository()
+        appRepository = FakeAppRepository()
+        profileResolver = FakeProfileResolver(
+            personal = Profile(Profile.Type.Personal, personalHandle, 0),
+            work = Profile(Profile.Type.Work, workHandle, 10),
+        )
+        store = DefaultConfigStore(
+            settings,
+            transparenciesRepository,
+            widgetRepository,
+            searchableRepository,
+            appRepository,
+            profileResolver,
+        )
+    }
+
+    @After
+    fun tearDown() {
+        database.close()
+    }
+
+    private fun app(packageName: String, user: UserHandle): FakeApplication {
+        return FakeApplication(ComponentName(packageName, "$packageName.MainActivity"), user)
+    }
+
+    // ----- readState -----
+
+    @Test
+    fun `readState combines settings transparency widgets and dock favorites`() = runTest {
+        val theme = Transparencies(
+            id = UUID.randomUUID(),
+            name = "glass",
+            background = 0.5f,
+            surface = 0.6f,
+            elevatedSurface = 0.7f,
+        )
+        transparenciesRepository.upsert(theme)
+        settings.state = ConfigState(themedIcons = true, dockEnabled = true)
+        settings.transparenciesId = theme.id
+        widgetRepository.widgets = listOf(
+            WeatherWidget(UUID.randomUUID()),
+            NotesWidget(UUID.randomUUID()),
+            AppWidget(UUID.randomUUID(), AppWidgetConfig(widgetId = 1, height = 100)),
+        )
+        val appA = app("com.example.a", personalHandle)
+        val appB = app("com.example.b", workHandle)
+        searchableRepository.manuallySorted = listOf(appA, appB)
+
+        val state = store.readState()
+
+        assertTrue(state.themedIcons)
+        assertTrue(state.dockEnabled)
+        assertEquals("glass", state.transparencyName)
+        assertEquals(0.5f, state.transparencyBackground)
+        assertEquals(0.6f, state.transparencySurface)
+        assertEquals(0.7f, state.transparencyElevatedSurface)
+        assertEquals(listOf(BuiltinWidget.Weather, BuiltinWidget.Notes), state.widgets)
+        assertEquals(
+            listOf(
+                Favorite("com.example.a", ConfigProfile.Personal),
+                Favorite("com.example.b", ConfigProfile.Work),
+            ),
+            state.dockFavorites,
+        )
+    }
+
+    @Test
+    fun `readState skips favorites whose profile cannot be resolved`() = runTest {
+        searchableRepository.manuallySorted = listOf(app("com.example.a", userHandleFor(99)))
+
+        val state = store.readState()
+
+        assertEquals(emptyList<Favorite>(), state.dockFavorites)
+    }
+
+    // ----- transparency -----
+
+    @Test
+    fun `SetTransparency creates a new scheme and selects it`() = runTest {
+        val diagnostics = store.apply(
+            listOf(ConfigMutation.SetTransparency(name = "glass", background = 0.5f))
+        )
+
+        assertEquals(emptyList<Diagnostic>(), diagnostics)
+        val theme = transparenciesRepository.findByName("glass")
+        assertEquals(0.5f, theme!!.background)
+        assertNull(theme.surface)
+        assertEquals(theme.id, settings.transparenciesId)
+    }
+
+    @Test
+    fun `SetTransparency without a name derives from the default when the selected scheme is gone`() = runTest {
+        settings.transparenciesId = UUID.randomUUID() // deleted user scheme
+
+        val diagnostics = store.apply(
+            listOf(ConfigMutation.SetTransparency(background = 0.5f))
+        )
+
+        assertEquals(emptyList<Diagnostic>(), diagnostics)
+        val selected = transparenciesRepository.getOnce(settings.transparenciesId)
+        assertEquals(0.5f, selected!!.background)
+        assertEquals(false, selected.builtIn)
+    }
+
+    @Test
+    fun `SetTransparency preserves unspecified values and stays idempotent`() = runTest {
+        store.apply(
+            listOf(
+                ConfigMutation.SetTransparency(
+                    name = "glass",
+                    background = 0.5f,
+                    surface = 0.6f,
+                    elevatedSurface = 0.7f,
+                )
+            )
+        )
+        val created = transparenciesRepository.findByName("glass")!!
+
+        store.apply(listOf(ConfigMutation.SetTransparency(name = "glass", background = 0.2f)))
+
+        val updated = transparenciesRepository.findByName("glass")!!
+        assertEquals(created.id, updated.id)
+        assertEquals(0.2f, updated.background)
+        assertEquals(0.6f, updated.surface)
+        assertEquals(0.7f, updated.elevatedSurface)
+        assertEquals(1, database.themeDao().getAllTransparencies().first().size)
+        assertEquals(updated.id, settings.transparenciesId)
+    }
+
+    @Test
+    fun `SetTransparency selects a built-in scheme without creating a row`() = runTest {
+        val defaultName = context.getString(R.string.preference_transparencies_default)
+
+        store.apply(listOf(ConfigMutation.SetTransparency(name = defaultName)))
+
+        assertEquals(DefaultThemeId, settings.transparenciesId)
+        assertTrue(database.themeDao().getAllTransparencies().first().isEmpty())
+    }
+
+    @Test
+    fun `SetTransparency with values derives a user scheme from a built-in`() = runTest {
+        settings.transparenciesId = DefaultThemeId
+
+        store.apply(listOf(ConfigMutation.SetTransparency(background = 0.3f)))
+
+        assertNotEquals(DefaultThemeId, settings.transparenciesId)
+        val derived = transparenciesRepository.getOnce(settings.transparenciesId)!!
+        assertEquals(context.getString(R.string.preference_transparencies_default), derived.name)
+        assertEquals(0.3f, derived.background)
+
+        // The derived scheme shadows the built-in name, so a follow-up
+        // mutation by name updates it instead of deriving another scheme.
+        store.apply(
+            listOf(
+                ConfigMutation.SetTransparency(
+                    name = derived.name,
+                    surface = 0.4f,
+                )
+            )
+        )
+        assertEquals(1, database.themeDao().getAllTransparencies().first().size)
+        val updated = transparenciesRepository.findByName(derived.name)!!
+        assertEquals(derived.id, updated.id)
+        assertEquals(0.3f, updated.background)
+        assertEquals(0.4f, updated.surface)
+    }
+
+    // ----- widgets -----
+
+    @Test
+    fun `SetWidgets reconciles built-ins and preserves external widgets`() = runTest {
+        val weather = WeatherWidget(UUID.randomUUID())
+        val notes = NotesWidget(UUID.randomUUID(), NotesWidgetConfig(storedText = "hello"))
+        val external = AppWidget(UUID.randomUUID(), AppWidgetConfig(widgetId = 7, height = 200))
+        widgetRepository.widgets = listOf(weather, notes, external)
+
+        val diagnostics = store.apply(
+            listOf(ConfigMutation.SetWidgets(listOf(BuiltinWidget.Notes, BuiltinWidget.Calendar)))
+        )
+
+        val result = widgetRepository.widgets
+        assertEquals(3, result.size)
+        // Notes keeps ID and content.
+        assertEquals(notes, result[0])
+        // Calendar is new.
+        assertTrue(result[1] is CalendarWidget)
+        // The external app widget is preserved, not deleted.
+        assertEquals(external, result[2])
+        assertEquals(1, diagnostics.size)
+        assertEquals(Severity.Warning, diagnostics[0].severity)
+        assertEquals("unsupported-widget", diagnostics[0].code)
+    }
+
+    @Test
+    fun `SetWidgets removes built-ins missing from the config`() = runTest {
+        widgetRepository.widgets = listOf(
+            WeatherWidget(UUID.randomUUID()),
+            NotesWidget(UUID.randomUUID()),
+        )
+
+        store.apply(listOf(ConfigMutation.SetWidgets(listOf(BuiltinWidget.Weather))))
+
+        assertEquals(1, widgetRepository.widgets.size)
+        assertTrue(widgetRepository.widgets[0] is WeatherWidget)
+    }
+
+    // ----- dock favorites -----
+
+    @Test
+    fun `SetDockFavorites resolves apps and writes them in config order`() = runTest {
+        val appA = app("com.example.a", personalHandle)
+        val appB = app("com.example.b", workHandle)
+        appRepository.apps["com.example.a" to personalHandle] = appA
+        appRepository.apps["com.example.b" to workHandle] = appB
+        val automatic = app("com.example.c", personalHandle)
+        searchableRepository.automaticallySorted = listOf(automatic)
+
+        val diagnostics = store.apply(
+            listOf(
+                ConfigMutation.SetDockFavorites(
+                    listOf(
+                        Favorite("com.example.b", ConfigProfile.Work),
+                        Favorite("com.example.a", ConfigProfile.Personal),
+                    )
+                )
+            )
+        )
+
+        assertEquals(emptyList<Diagnostic>(), diagnostics)
+        assertEquals(listOf(appB, appA), searchableRepository.manuallySorted)
+        // Automatically pinned favorites are outside the config's scope.
+        assertEquals(listOf(automatic), searchableRepository.automaticallySorted)
+    }
+
+    @Test
+    fun `SetDockFavorites skips unavailable apps with error diagnostics`() = runTest {
+        val appA = app("com.example.a", personalHandle)
+        appRepository.apps["com.example.a" to personalHandle] = appA
+
+        val diagnostics = store.apply(
+            listOf(
+                ConfigMutation.SetDockFavorites(
+                    listOf(
+                        Favorite("com.example.a", ConfigProfile.Personal),
+                        Favorite("com.example.missing", ConfigProfile.Personal),
+                    )
+                )
+            )
+        )
+
+        assertEquals(listOf(appA), searchableRepository.manuallySorted)
+        assertEquals(1, diagnostics.size)
+        assertEquals(Severity.Error, diagnostics[0].severity)
+        assertEquals("favorite-unavailable", diagnostics[0].code)
+        assertEquals("home.dock.favorites[1]", diagnostics[0].path)
+    }
+
+    @Test
+    fun `SetDockFavorites reports an unavailable profile`() = runTest {
+        profileResolver.work = null
+
+        val diagnostics = store.apply(
+            listOf(
+                ConfigMutation.SetDockFavorites(
+                    listOf(Favorite("com.example.b", ConfigProfile.Work))
+                )
+            )
+        )
+
+        assertEquals(emptyList<SavableSearchable>(), searchableRepository.manuallySorted)
+        assertEquals(1, diagnostics.size)
+        assertEquals("profile-unavailable", diagnostics[0].code)
+        assertEquals(Severity.Error, diagnostics[0].severity)
+    }
+
+    // ----- settings-backed mutations -----
+
+    @Test
+    fun `settings-backed mutations are applied in a single settings call`() = runTest {
+        store.apply(
+            listOf(
+                ConfigMutation.SetIcons(themed = true),
+                ConfigMutation.SetDockEnabled(true),
+                ConfigMutation.SetClock(style = ClockStyle.Segment),
+                ConfigMutation.SetWidgets(emptyList()),
+            )
+        )
+
+        assertEquals(1, settings.applyCalls.size)
+        assertEquals(3, settings.applyCalls[0].size)
+        assertTrue(settings.state.themedIcons)
+        assertTrue(settings.state.dockEnabled)
+        assertEquals(ClockStyle.Segment, settings.state.clockStyle)
+    }
+
+    // ----- fakes -----
+
+    private class FakeLauncherConfigSettings(
+        var state: ConfigState = ConfigState(),
+        var transparenciesId: UUID = UUID(0L, 0L),
+    ) : LauncherConfigSettings {
+        val applyCalls = mutableListOf<List<ConfigMutation>>()
+
+        override suspend fun readState(): SettingsBackedState {
+            return SettingsBackedState(state, transparenciesId)
+        }
+
+        override suspend fun apply(mutations: List<ConfigMutation>) {
+            applyCalls += mutations
+            for (mutation in mutations) {
+                when (mutation) {
+                    is ConfigMutation.SetIcons -> state = state.copy(
+                        themedIcons = mutation.themed ?: state.themedIcons,
+                        enforceThemedIcons = mutation.enforceThemed ?: state.enforceThemedIcons,
+                        iconPack = mutation.pack ?: state.iconPack,
+                    )
+
+                    is ConfigMutation.SetSearchBarPosition ->
+                        state = state.copy(searchBarPosition = mutation.position)
+
+                    is ConfigMutation.SetDockEnabled ->
+                        state = state.copy(dockEnabled = mutation.enabled)
+
+                    is ConfigMutation.SetWidgetsEnabled ->
+                        state = state.copy(widgetsEnabled = mutation.enabled)
+
+                    is ConfigMutation.SetClock -> state = state.copy(
+                        clockStyle = mutation.style ?: state.clockStyle,
+                        clockFillHeight = mutation.fillHeight ?: state.clockFillHeight,
+                    )
+
+                    else -> Unit
+                }
+            }
+        }
+
+        override suspend fun setTransparenciesId(id: UUID) {
+            transparenciesId = id
+        }
+    }
+
+    private class FakeWidgetRepository : WidgetRepository {
+        var widgets: List<Widget> = emptyList()
+
+        override fun get(parent: UUID?, limit: Int, offset: Int): Flow<List<Widget>> {
+            return flowOf(widgets)
+        }
+
+        override suspend fun setAwaited(widgets: List<Widget>, parentId: UUID?) {
+            this.widgets = widgets
+        }
+
+        override fun create(widget: Widget, position: Int, parentId: UUID?) =
+            throw NotImplementedError()
+
+        override fun update(widget: Widget) = throw NotImplementedError()
+        override fun delete(widget: Widget) = throw NotImplementedError()
+        override fun set(widgets: List<Widget>, parentId: UUID?) = throw NotImplementedError()
+        override fun exists(type: String): Flow<Boolean> = throw NotImplementedError()
+        override fun count(type: String): Flow<Int> = throw NotImplementedError()
+        override suspend fun backup(toDir: File) = throw NotImplementedError()
+        override suspend fun restore(fromDir: File) = throw NotImplementedError()
+    }
+
+    private class FakeSavableSearchableRepository : SavableSearchableRepository {
+        var manuallySorted: List<SavableSearchable> = emptyList()
+        var automaticallySorted: List<SavableSearchable> = emptyList()
+
+        override fun get(
+            includeTypes: List<String>?,
+            excludeTypes: List<String>?,
+            minPinnedLevel: PinnedLevel,
+            maxPinnedLevel: PinnedLevel,
+            minVisibility: VisibilityLevel,
+            maxVisibility: VisibilityLevel,
+            limit: Int,
+        ): Flow<List<SavableSearchable>> {
+            val items = buildList {
+                if (PinnedLevel.ManuallySorted in minPinnedLevel..maxPinnedLevel) {
+                    addAll(manuallySorted)
+                }
+                if (PinnedLevel.AutomaticallySorted in minPinnedLevel..maxPinnedLevel) {
+                    addAll(automaticallySorted)
+                }
+            }
+            return flowOf(items.filter { includeTypes == null || it.domain in includeTypes })
+        }
+
+        override suspend fun updateFavoritesAwaited(
+            manuallySorted: List<SavableSearchable>,
+            automaticallySorted: List<SavableSearchable>,
+        ) {
+            this.manuallySorted = manuallySorted
+            this.automaticallySorted = automaticallySorted
+        }
+
+        override fun insert(searchable: SavableSearchable) = throw NotImplementedError()
+        override fun upsert(
+            searchable: SavableSearchable,
+            visibility: VisibilityLevel?,
+            pinned: Boolean?,
+            launchCount: Int?,
+            weight: Double?,
+        ) = throw NotImplementedError()
+
+        override fun update(
+            searchable: SavableSearchable,
+            visibility: VisibilityLevel?,
+            pinned: Boolean?,
+            launchCount: Int?,
+            weight: Double?,
+        ) = throw NotImplementedError()
+
+        override fun replace(key: String, newSearchable: SavableSearchable) =
+            throw NotImplementedError()
+
+        override fun touch(searchable: SavableSearchable) = throw NotImplementedError()
+        override fun getKeys(
+            includeTypes: List<String>?,
+            excludeTypes: List<String>?,
+            minPinnedLevel: PinnedLevel,
+            maxPinnedLevel: PinnedLevel,
+            minVisibility: VisibilityLevel,
+            maxVisibility: VisibilityLevel,
+            limit: Int,
+        ): Flow<List<String>> = throw NotImplementedError()
+
+        override fun isPinned(searchable: SavableSearchable): Flow<Boolean> =
+            throw NotImplementedError()
+
+        override fun getVisibility(searchable: SavableSearchable): Flow<VisibilityLevel> =
+            throw NotImplementedError()
+
+        override fun updateFavorites(
+            manuallySorted: List<SavableSearchable>,
+            automaticallySorted: List<SavableSearchable>,
+        ) = throw NotImplementedError()
+
+        override fun sortByRelevance(keys: List<String>): Flow<List<String>> =
+            throw NotImplementedError()
+
+        override fun sortByWeight(keys: List<String>): Flow<List<String>> =
+            throw NotImplementedError()
+
+        override fun getWeights(keys: List<String>): Flow<Map<String, Double>> =
+            throw NotImplementedError()
+
+        override fun delete(searchable: SavableSearchable) = throw NotImplementedError()
+        override fun getByKeys(keys: List<String>): Flow<List<SavableSearchable>> =
+            throw NotImplementedError()
+
+        override suspend fun cleanupDatabase(): Int = throw NotImplementedError()
+        override suspend fun backup(toDir: File) = throw NotImplementedError()
+        override suspend fun restore(fromDir: File) = throw NotImplementedError()
+    }
+
+    private class FakeAppRepository : AppRepository {
+        val apps = mutableMapOf<Pair<String, UserHandle>, Application>()
+
+        override fun findOne(packageName: String, user: UserHandle): Flow<Application?> {
+            return flowOf(apps[packageName to user])
+        }
+
+        override fun findMany() = flowOf(persistentListOf<Application>())
+        override fun search(query: String, allowNetwork: Boolean): Flow<List<Application>> {
+            return flowOf(emptyList())
+        }
+    }
+
+    private class FakeProfileResolver(
+        var personal: Profile?,
+        var work: Profile?,
+    ) : ProfileResolver {
+        override fun getProfile(type: Profile.Type): Profile? {
+            return when (type) {
+                Profile.Type.Personal -> personal
+                Profile.Type.Work -> work
+                else -> null
+            }
+        }
+
+        override suspend fun getProfile(userHandle: UserHandle): Profile? {
+            return listOfNotNull(personal, work).firstOrNull { it.userHandle == userHandle }
+        }
+    }
+
+    private class FakeApplication(
+        override val componentName: ComponentName,
+        override val user: UserHandle,
+    ) : Application {
+        override val key: String = "app://${componentName.packageName}"
+        override val domain: String = "app"
+        override val label: String = componentName.packageName
+        override val isSuspended: Boolean = false
+        override val versionName: String? = null
+        override val canUninstall: Boolean = false
+        override val canShareApk: Boolean = false
+
+        override fun overrideLabel(label: String): SavableSearchable = this
+        override fun launch(context: Context, options: Bundle?): Boolean = false
+        override fun getPlaceholderIcon(context: Context): StaticLauncherIcon =
+            throw NotImplementedError()
+
+        override fun getSerializer(): SearchableSerializer = throw NotImplementedError()
+        override fun uninstall(context: Context) = throw NotImplementedError()
+        override fun openAppDetails(context: Context) = throw NotImplementedError()
+    }
+
+    private companion object {
+        fun userHandleFor(id: Int): UserHandle {
+            val parcel = Parcel.obtain()
+            try {
+                parcel.writeInt(id)
+                parcel.setDataPosition(0)
+                return UserHandle.CREATOR.createFromParcel(parcel)
+            } finally {
+                parcel.recycle()
+            }
+        }
+    }
+}
