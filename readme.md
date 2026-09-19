@@ -1,10 +1,12 @@
 # Andashi Home
 
-A home screen you configure with a file.
+A search-first launcher with a minimal home screen, configured with a file.
 
-One page. Widgets and a dock of favorites. Everything else is one search away.
-No icon grids to arrange, no settings tree to click through: the launcher reads
-`launcher.json`, converges to it, and tells you what it applied.
+The home screen is one page: a clock, a few widgets, a dock of favorites.
+Nothing else lives there. Every app, contact, file, setting or calculation is
+reached the same way, by typing a few letters into search. No icon grids to
+arrange, no settings tree to click through: the launcher reads `launcher.json`,
+converges to it, and tells you what it applied.
 
 Andashi Home is the launcher of the [andashi](https://andashi.org) distribution,
 a GrapheneOS setup that runs a phone as a set of isolated profiles ("zones").
@@ -12,9 +14,12 @@ Each zone gets its own `launcher.json`. That is the whole configuration story.
 
 ## The idea
 
-- **Simple by subtraction.** The home screen holds what you glance at (a clock,
-  a few widgets) and what you tap most (the dock). Apps live in search, not on
-  the desktop.
+- **Search first.** The search bar is the primary interface. Apps, shortcuts,
+  contacts, files, calendar entries, unit conversions and web searches all come
+  from the same field, ranked by use. Opening an app is typing, not hunting.
+- **Minimal home.** The home screen holds what you glance at (a clock, a few
+  widgets) and what you tap most (the dock). Apps live in search, not on the
+  desktop, so the home screen never fills up and never needs tidying.
 - **Configured, not clicked.** Every deterministic setting is a key in one
   JSON document with comments. Edit it, push it, the launcher reloads live.
   Re-pushing an unchanged file changes nothing; that is checked, not hoped.
