@@ -18,17 +18,29 @@ That removes generic-Android constraints and adds a few specific ones.
 - **Storage-Scopes friendly:** config lives in the app-specific external files dir
   (ADR 0003); the launcher never requests broad storage access.
 - **minSdk raised to the current Android release (36)**, matching `targetSdk`;
-  `compileSdk` already tracks the newest SDK (37). GrapheneOS ships only current
-  Android, so all pre-36 compat code (`core/compat` shims, version checks, legacy
-  fallbacks) becomes deletable over time instead of being maintained. Older-Android
+  `compileSdk` already tracks the newest SDK (37). Raised 2026-09-19 (issue #19).
+  GrapheneOS ships only current Android, so all pre-36 compat code (`core/compat`
+  shims, about 120 `SDK_INT` checks, legacy fallbacks) is dead and gets deleted
+  with the module diet (issue #20) instead of being maintained. Older-Android
   support is explicitly dropped, not just deprioritized.
 - **Own signing key, pinned in the provisioning repo** (`apks/SHA256SUMS` flow).
   Reproducible-ish builds: pinned toolchain, version catalog, build log archived
   (as `kvaesitso-patch/build-*.log` already does).
-- **New applicationId.** Coexisting with/upgrading over upstream installs is not a
-  goal; provisioning creates fresh profiles anyway. Side effect: AppWidget host
-  bindings and favorites do not migrate from a stock install — accepted, documented
-  in the setup docs. (Package name stays a single rename, done once, early.)
+- **New applicationId: `org.andashi.home`** (debug builds `org.andashi.home.debug`,
+  nightly `org.andashi.home.nightly`; the release build carries no suffix). Display
+  name "Andashi Home". Decided 2026-09-19 together with the organization
+  (andashi, andashi.org, `github.com/andashi/home`). Content authorities and the
+  reload action derive from the *effective* applicationId via
+  `${applicationId}` in the manifest, so the release build serves
+  `org.andashi.home.state`, `org.andashi.home.config-ingest` and
+  `org.andashi.home.action.RELOAD_CONFIG`, while a debug build serves
+  `org.andashi.home.debug.state` and so on. Scripts derive every identifier
+  from the package name they target; the e2e scripts do exactly that.
+  Kotlin packages keep the upstream namespace for now; renaming them is cosmetic
+  and part of the module diet (issue #20). Coexisting with/upgrading over upstream
+  installs is not a goal; provisioning creates fresh profiles anyway. Side effect:
+  AppWidget host bindings and favorites do not migrate from a stock install —
+  accepted.
 
 ### Features we build because GrapheneOS enables them
 
