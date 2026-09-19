@@ -1,76 +1,148 @@
-# Kvaesitso
+# Andashi Home
 
-<img src="https://raw.githubusercontent.com/MM2-0/Kvaesitso/main/assets/icons/ic_launcher.png" width="128">
+A home screen you configure with a file.
 
-Kvaesitso is a search focused, free and open source launcher for Android.
+One page. Widgets and a dock of favorites. Everything else is one search away.
+No icon grids to arrange, no settings tree to click through: the launcher reads
+`launcher.json`, converges to it, and tells you what it applied.
 
-[Website and documentation](https://kvaesitso.mm20.de)
+Andashi Home is the launcher of the [andashi](https://andashi.org) distribution,
+a GrapheneOS setup that runs a phone as a set of isolated profiles ("zones").
+Each zone gets its own `launcher.json`. That is the whole configuration story.
 
-## Installation
+## The idea
 
-### Using an F-Droid client and MM20's repo
+- **Simple by subtraction.** The home screen holds what you glance at (a clock,
+  a few widgets) and what you tap most (the dock). Apps live in search, not on
+  the desktop.
+- **Configured, not clicked.** Every deterministic setting is a key in one
+  JSON document with comments. Edit it, push it, the launcher reloads live.
+  Re-pushing an unchanged file changes nothing; that is checked, not hoped.
+- **Verifiable.** The launcher exposes its effective state and the diagnostics
+  of the last reload. Provisioning does not trust an exit code, it reads back.
+- **Per profile.** Every Android user (owner, work, private space, secondary
+  users) has its own file and its own state. A config written into one profile
+  never touches another.
 
-The preferred way of installation is using the [F-Droid](https://f-droid.org) application. That way
-you will always be notified about updates. Kvaesitso is available in the official F-Droid
-repository, but all features depending on non-foss external APIs were removed.
-For feature-complete builds you can add [MM20's repository](https://fdroid.mm20.de). Just scan the code below or open
-the link on your phone:
+## What a config looks like
 
-<img src="https://fdroid.mm20.de/repo/index.png" width="150" alt="QR code">
-
-https://fdroid.mm20.de/repo/
-
-The same version is also available in [IzzyOnDroid's repository](https://apt.izzysoft.de/fdroid/index/apk/de.mm20.launcher2.release).
-
-### Manual installation
-
-You can also download the latest release from
-the [releases page](https://github.com/MM2-0/Kvaesitso/releases/latest) and install it manually.
-
-## Report issues
-
-If you notice any bugs or issues create a new issue in
-the [issue tracker](https://github.com/MM2-0/Kvaesitso/issues). Before you do, please search the
-existing issues for any similar issues. Please include any relevant information such as steps to
-reproduce, stack traces, logs, and device information. These information can be founder under
-Settings > Debug > Crash reporter and Settings > Debug > Export debug information.
-
-## Feature requests
-
-If you have an idea for a new feature, just create a new issue. However, there is no guarantee that
-they will be implemented. If it's important for you, consider implementing it yourself,
-see [contribute](#contribute).
-
-
-## Contribute
-
-Contributions are always welcome. If you want to fix any existing issues or implement smaller new
-features just create a new pull request. If you plan to implement any (bigger) new features, please
-create an issue first so we can discuss if and how this feature should be implemented.
-
-If you want to help translating, see [how to translate the project.](https://kvaesitso.mm20.de/docs/contributor-guide/i18n)
-
-<a href="https://i18n.mm20.de/engage/kvaesitso/">
-<img src="https://i18n.mm20.de/widgets/kvaesitso/-/287x66-grey.png" alt ="Translation Status">
-</a>
-
-## Links
-
-- User guide: https://kvaesitso.mm20.de/docs/user-guide
-- F-Droid-Repository: https://fdroid.mm20.de
-
-## Thanks to
-
-- [@EliotAku](https://github.com/EliotAku) for the app icon
-- All [translators and code contributors](https://github.com/MM2-0/Kvaesitso/graphs/contributors)
-
-## License
-
-This software is free software licensed under the GNU General Public License 3.0.
-
+```jsonc
+{
+  "schemaVersion": 1,
+  "icons": { "themed": true, "enforceThemed": true, "pack": "app.lawnchair.lawnicons" },
+  "appearance": {
+    "transparency": { "name": "fold-glass", "background": 0.31, "surface": 0.31, "elevatedSurface": 0.31 }
+  },
+  "home": {
+    "searchBar": { "position": "bottom" },
+    "dock": { "enabled": true, "favorites": [{ "packageName": "org.thoughtcrime.securesms" }] },
+    "widgets": { "enabled": true, "widgets": ["weather", "calendar"] },
+    "clock": { "style": "digital1", "fillHeight": true },
+  },
+}
 ```
 
+Comments and trailing commas are fine. Unknown keys are reported, not rejected,
+so the file may run ahead of the app and vice versa.
+
+## How it reaches the phone
+
+Three shell commands, all per Android user, all without root:
+
+```sh
+# 1. write the file into the launcher of user N
+adb shell content write --user N --uri content://org.andashi.home.config-ingest/launcher.json < launcher.json
+
+# 2. ask for an explicit reload (the file watcher does it anyway; this makes scripts deterministic)
+adb shell am broadcast --user N -a org.andashi.home.action.RELOAD_CONFIG \
+    -n org.andashi.home/de.mm20.launcher2.config.service.ReloadConfigReceiver
+
+# 3. read back what is in effect, and the report of the last reload
+adb shell content query --user N --uri content://org.andashi.home.state/config
+adb shell content query --user N --uri content://org.andashi.home.state/diagnostics
+```
+
+The diagnostics carry the SHA-256 of the file the launcher last loaded, so a
+script waits for exactly its own push and then compares the effective config
+field by field. The [andashi provisioning](https://andashi.org) does this for
+every zone in well under a minute, replacing what used to be 27 minutes of UI
+automation.
+
+For the owner profile, plain `adb push` into the app's config directory works
+too; the file watcher picks it up. That is the dotfiles workflow: edit, save,
+done.
+
+Package names above are the target identity; the current test builds still
+carry the debug id `de.mm20.launcher2.debug` until the rename lands.
+
+## Security posture
+
+Built for GrapheneOS and held to its standards:
+
+- No Play Services, no telemetry, no network access for configuration.
+- Config lives in app-specific storage; no broad storage permissions, Storage
+  Scopes stay untouched.
+- The three interfaces (ingest, reload, read-back) are gated to the shell and
+  system user via `WRITE_SECURE_SETTINGS`. No app on the device can reach them.
+- Whoever has adb access controls the device anyway; the launcher does not add
+  a capability that does not already exist.
+
+## What is configurable today
+
+| Section | Keys |
+|---|---|
+| `icons` | themed icons, enforce themed, icon pack |
+| `appearance.transparency` | scheme name, background, surface, elevated surface |
+| `home.searchBar` | position |
+| `home.dock` | enabled, ordered favorites (package plus profile) |
+| `home.widgets` | enabled, ordered built-in widgets (weather, music, calendar, apps, notes) |
+| `home.clock` | style, fill height |
+
+Coverage of every remaining deterministic setting is tracked in
+[#3](https://github.com/andashi/home/issues/3). The single-page grid with
+placed widgets ([#23](https://github.com/andashi/home/issues/23)) and the glass
+surfaces ([#24](https://github.com/andashi/home/issues/24)) are the next visible
+steps.
+
+## Status
+
+Early. The configuration system is complete for provisioning parity and
+verified end to end on a GrapheneOS emulator, as the unrooted shell, across six
+profiles. The launcher still looks like its origin; the new home surface is not
+built yet. Identity (`org.andashi.home`), signing and the first run on real
+hardware are the open items before daily use
+([#19](https://github.com/andashi/home/issues/19),
+[#21](https://github.com/andashi/home/issues/21)).
+
+## Building and testing
+
+```sh
+./gradlew :app:app:assembleDefaultDebug        # debug APK
+./gradlew :core:config:test :services:config:testDebugUnitTest   # config unit tests
+./gradlew :app:ui:verifyRoborazziDebug         # screenshot goldens
+e2e/l4-config.sh                               # end-to-end, needs the andashi emulator harness
+e2e/l4-provisioning-config.sh                  # the real provisioning step against every zone
+```
+
+Test layers, emulator conventions and the definition of done are in
+[`AGENTS.md`](AGENTS.md). Architecture decisions are recorded in
+[`docs/architecture/adr/`](docs/architecture/adr/); start with the
+[index](docs/architecture/README.md).
+
+## Origins and license
+
+Andashi Home started as a fork of [Kvaesitso](https://github.com/MM2-0/Kvaesitso)
+by MM2-0, a search-focused launcher, and keeps its search and provider
+foundation. It is a hard fork: no upstream merges, occasional cherry-picks,
+and a home screen of its own. "Kvaesitso" is upstream's name; this project
+does not use it.
+
+This software is free software under the GNU General Public License 3.0.
+Upstream copyright is retained:
+
+```
 Copyright (C) 2021–2026 MM2-0 and the Kvaesitso contributors
+Copyright (C) 2026 andashi
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -86,4 +158,6 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ```
 
-The plugin SDK modules (`plugins/sdk` and `core/shared`) are licensed under the Apache License 2.0.
+The plugin SDK modules (`plugins/sdk` and `core/shared`), inherited from
+upstream, are licensed under the Apache License 2.0 for as long as they remain
+in the tree.
