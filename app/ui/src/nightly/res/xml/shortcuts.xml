@@ -9,7 +9,7 @@
         <intent
             android:action="android.intent.action.ASSIST"
             android:targetClass="de.mm20.launcher2.ui.assistant.AssistantActivity"
-            android:targetPackage="de.mm20.launcher2.nightly" />
+            android:targetPackage="org.andashi.home.nightly" />
     </shortcut>
 
 </shortcuts>

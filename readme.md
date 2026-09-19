@@ -77,8 +77,7 @@ For the owner profile, plain `adb push` into the app's config directory works
 too; the file watcher picks it up. That is the dotfiles workflow: edit, save,
 done.
 
-Package names above are the target identity; the current test builds still
-carry the debug id `de.mm20.launcher2.debug` until the rename lands.
+Debug builds use `org.andashi.home.debug`; the e2e scripts target that id.
 
 ## Security posture
 

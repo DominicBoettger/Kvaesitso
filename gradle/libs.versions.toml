@@ -2,7 +2,7 @@
 mustache = "0.9.14"
 jacksonCore = "2.21.3"
 jacksonDataformatYaml = "2.21.3"
-minSdk = "26"
+minSdk = "36"
 compileSdk = "37"
 compileSdkMinor = "1"
 targetSdk = "36"

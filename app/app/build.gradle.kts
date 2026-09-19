@@ -30,7 +30,8 @@ android {
         }
     }
     defaultConfig {
-        applicationId = "de.mm20.launcher2"
+        // Andashi Home (ADR 0006). Kotlin packages keep the upstream namespace.
+        applicationId = "org.andashi.home"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = System.getenv("VERSION_CODE_OVERRIDE")?.toIntOrNull() ?: 2026091500
@@ -49,7 +50,6 @@ android {
 
     buildTypes {
         release {
-            applicationIdSuffix = ".release"
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

@@ -19,7 +19,7 @@
 #   4. for every non-managed profile from config/profiles.json: resolves the
 #      uid, starts evicted users, and makes sure the debug package is
 #      installed for that user (pm install-existing --user)
-#   5. runs LAUNCHER_CONFIG_KEY=kvaesitso-fork provision/45-launcher-config.sh
+#   5. runs LAUNCHER_CONFIG_KEY=andashi-home provision/45-launcher-config.sh
 #      and requires exit 0 - the step itself writes the generated
 #      config/launcher/<profile>.json files through the ingest provider
 #      (`content write --user`; adb push cannot reach a secondary user's
@@ -55,7 +55,7 @@ export OVERLAY_DIR="$GOS_REPO/emulator/instances/test"
 export READ_ONLY=1
 SNAPSHOT="${SNAPSHOT:-clean}"
 APK="${1:-$(dirname "$0")/../app/app/build/outputs/apk/default/debug/app-default-debug.apk}"
-PKG="de.mm20.launcher2.debug"
+PKG="org.andashi.home.debug"
 STATE_URI="content://$PKG.state"
 INGEST_URI="content://$PKG.config-ingest/launcher.json"
 PROFILES_JSON="$GOS_REPO/config/profiles.json"
@@ -289,8 +289,8 @@ done
 
 # --- 5. run the real provisioning step ------------------------------------
 
-log "running provision/45-launcher-config.sh (LAUNCHER_CONFIG_KEY=kvaesitso-fork)"
-(cd "$GOS_REPO" && LAUNCHER_CONFIG_KEY=kvaesitso-fork ADB_SERIAL="$SERIAL" bash provision/45-launcher-config.sh) \
+log "running provision/45-launcher-config.sh (LAUNCHER_CONFIG_KEY=andashi-home)"
+(cd "$GOS_REPO" && LAUNCHER_CONFIG_KEY=andashi-home ADB_SERIAL="$SERIAL" bash provision/45-launcher-config.sh) \
   || die "45-launcher-config.sh exited non-zero - provisioning step FAILED"
 ok "45-launcher-config.sh converged all profiles (exit 0)"
 
