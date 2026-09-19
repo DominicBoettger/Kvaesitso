@@ -110,8 +110,12 @@ Compose recomposition over the DataStore makes the reload "hot" — no restart.
 
 An exported, **read-only** `ContentProvider` serving the current effective state
 as JSON (`content://<applicationId>.state/config`), plus the diagnostics of the
-last reload. No permission for v1 (settings are not secrets; revisit if that
-changes). This is the verification half of the loop:
+last reload. Gated by `WRITE_SECURE_SETTINGS` like the ingest provider and the
+receiver, so the whole config surface has one gate (shell and system). The
+first draft left it open ("settings are not secrets"); it does expose dock
+package names, widget selection and diagnostic messages, and there is no
+on-device consumer that would need it, so least privilege wins. This is the
+verification half of the loop:
 
 ```
 content write launcher.json --user N  ->  broadcast RELOAD --user N

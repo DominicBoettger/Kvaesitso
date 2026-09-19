@@ -57,6 +57,17 @@ class WidgetRepositoryTest {
     private fun rootIds() = database.widgetDao().queryRoot(100, 0)
     private fun childIds(parent: UUID) = database.widgetDao().queryByParent(parent, 100, 0)
 
+    @Test
+    fun `setAwaited after a pending set wins and its result is visible on return`() = runBlocking {
+        val a = WeatherWidget(UUID.randomUUID())
+        val b = MusicWidget(UUID.randomUUID())
+        repeat(20) {
+            repository.set(listOf(a))
+            repository.setAwaited(listOf(b))
+            assertEquals(listOf(b.id), rootIds().first().map { it.id })
+        }
+    }
+
     // ----- characterization of the existing async API -----
 
     @Test

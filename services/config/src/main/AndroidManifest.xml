@@ -13,11 +13,13 @@
             </intent-filter>
         </receiver>
 
-        <!-- Read-only read-back provider, no permission (ADR 0003). -->
+        <!-- Read-only read-back provider. Gated like the whole config surface:
+             WRITE_SECURE_SETTINGS is held by shell/system only (ADR 0003). -->
         <provider
             android:name=".ConfigStateProvider"
             android:authorities="${applicationId}.state"
             android:exported="true"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS"
             android:grantUriPermissions="false" />
 
         <!-- Write-only ingest for provisioning (`content write`, per user).

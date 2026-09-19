@@ -14,6 +14,8 @@ import de.mm20.launcher2.preferences.search.RankingSettings
 import de.mm20.launcher2.search.SavableSearchable
 import de.mm20.launcher2.search.SearchableDeserializer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -368,13 +370,23 @@ internal class SavableSearchableRepositoryImpl(
         }
     }
 
+    // Fork addition (Phase 2 config reload): one ordered writer for favorite
+    // replacements. Both variants enqueue at call time, so a fire-and-forget
+    // updateFavorites(A) issued before updateFavoritesAwaited(B) can never land
+    // after B and undo it; the awaited variant returns once its entry committed.
+    private val favoriteWrites = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for (write in favoriteWrites) write()
+        }
+    }
+
     override fun updateFavorites(
         manuallySorted: List<SavableSearchable>,
         automaticallySorted: List<SavableSearchable>
     ) {
-        scope.launch {
-            updateFavoritesInternal(manuallySorted, automaticallySorted)
-        }
+        favoriteWrites.trySend { updateFavoritesInternal(manuallySorted, automaticallySorted) }
     }
 
     // Fork addition (Phase 2 config reload): awaited variant, see interface.
@@ -382,7 +394,16 @@ internal class SavableSearchableRepositoryImpl(
         manuallySorted: List<SavableSearchable>,
         automaticallySorted: List<SavableSearchable>
     ) {
-        updateFavoritesInternal(manuallySorted, automaticallySorted)
+        val done = CompletableDeferred<Unit>()
+        favoriteWrites.trySend {
+            try {
+                updateFavoritesInternal(manuallySorted, automaticallySorted)
+                done.complete(Unit)
+            } catch (e: Throwable) {
+                done.completeExceptionally(e)
+            }
+        }
+        done.await()
     }
 
     private suspend fun updateFavoritesInternal(

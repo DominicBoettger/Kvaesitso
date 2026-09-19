@@ -171,6 +171,20 @@ class DefaultConfigStoreTest {
     }
 
     @Test
+    fun `SetTransparency without a name derives from the default when the selected scheme is gone`() = runTest {
+        settings.transparenciesId = UUID.randomUUID() // deleted user scheme
+
+        val diagnostics = store.apply(
+            listOf(ConfigMutation.SetTransparency(background = 0.5f))
+        )
+
+        assertEquals(emptyList<Diagnostic>(), diagnostics)
+        val selected = transparenciesRepository.getOnce(settings.transparenciesId)
+        assertEquals(0.5f, selected!!.background)
+        assertEquals(false, selected.builtIn)
+    }
+
+    @Test
     fun `SetTransparency preserves unspecified values and stays idempotent`() = runTest {
         store.apply(
             listOf(

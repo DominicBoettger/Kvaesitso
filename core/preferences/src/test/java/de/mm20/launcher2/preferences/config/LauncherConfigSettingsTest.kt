@@ -13,6 +13,7 @@ import de.mm20.launcher2.preferences.seedSettingsFile
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -94,11 +95,23 @@ class LauncherConfigSettingsTest {
     }
 
     @Test
-    fun `readState maps Custom clock widget style to Digital1 fallback`() = runTest {
+    fun `readState reports a Custom clock widget style as not representable`() = runTest {
         val gateway = createGateway(
             LauncherSettingsData(clockWidgetStyle = ClockWidgetStyleEnum.Custom)
         )
 
+        assertNull(gateway.readState().state.clockStyle)
+    }
+
+    @Test
+    fun `apply SetClock replaces a Custom clock widget`() = runTest {
+        val gateway = createGateway(
+            LauncherSettingsData(clockWidgetStyle = ClockWidgetStyleEnum.Custom)
+        )
+
+        val updated = gateway.applyAndReturn(listOf(ConfigMutation.SetClock(style = ClockStyle.Digital1)))
+
+        assertEquals(ClockWidgetStyleEnum.Digital1, updated.clockWidgetStyle)
         assertEquals(ClockStyle.Digital1, gateway.readState().state.clockStyle)
     }
 

@@ -31,7 +31,8 @@ class ConfigParserTest {
               "enabled": true,
               "favorites": [
                 { "packageName": "com.example.dialer", "profile": "personal" },
-                { "packageName": "com.example.mail", "profile": "work" }
+                { "packageName": "com.example.mail", "profile": "work" },
+                { "packageName": "com.example.vault", "profile": "private" }
               ]
             },
             "widgets": {
@@ -62,6 +63,7 @@ class ConfigParserTest {
             listOf(
                 Favorite("com.example.dialer", Profile.Personal),
                 Favorite("com.example.mail", Profile.Work),
+                Favorite("com.example.vault", Profile.Private),
             ),
             config.home?.dock?.favorites,
         )

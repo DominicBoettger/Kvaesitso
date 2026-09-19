@@ -16,8 +16,8 @@ import org.koin.core.context.GlobalContext
 
 /**
  * Fork addition (Phase 2, ADR 0003): read-only read-back provider, exported
- * without a permission (settings are not secrets — see the ADR; revisit if
- * that changes) and with `grantUriPermissions=false`:
+ * behind `WRITE_SECURE_SETTINGS` (shell and system only, like the rest of the
+ * config surface) and with `grantUriPermissions=false`:
  *
  * - `content://<applicationId>.state/config` — the current *effective*
  *   launcher state, serialized in the public [LauncherConfig] schema (not the

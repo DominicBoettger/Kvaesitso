@@ -13,6 +13,7 @@ import de.mm20.launcher2.search.Application
 import de.mm20.launcher2.search.SavableSearchable
 import de.mm20.launcher2.searchable.PinnedLevel
 import de.mm20.launcher2.searchable.SavableSearchableRepository
+import de.mm20.launcher2.themes.DefaultThemeId
 import de.mm20.launcher2.themes.transparencies.Transparencies
 import de.mm20.launcher2.themes.transparencies.TransparenciesRepository
 import de.mm20.launcher2.widgets.AppWidget
@@ -116,7 +117,9 @@ class DefaultConfigStore(
      * Resolves the target scheme by name (or the currently selected scheme),
      * preserves values the mutation does not mention, upserts and selects it.
      * Built-in schemes are never modified; changing values while a built-in
-     * is targeted derives a new user scheme instead.
+     * is targeted derives a new user scheme instead. When no name is given
+     * and the selected scheme no longer exists (deleted user scheme), the
+     * built-in default is the base, so the section still converges.
      */
     private suspend fun applyTransparency(
         mutation: ConfigMutation.SetTransparency,
@@ -126,6 +129,7 @@ class DefaultConfigStore(
             transparenciesRepository.findByName(name)
         } else {
             transparenciesRepository.getOnce(settings.readState().transparenciesId)
+                ?: transparenciesRepository.getOnce(DefaultThemeId)
         }
 
         val hasValueChanges = mutation.background != null ||
@@ -223,6 +227,7 @@ class DefaultConfigStore(
             val profileType = when (favorite.profile) {
                 ConfigProfile.Personal -> Profile.Type.Personal
                 ConfigProfile.Work -> Profile.Type.Work
+                ConfigProfile.Private -> Profile.Type.Private
             }
             val profile = profileResolver.getProfile(profileType)
             if (profile == null) {
@@ -266,8 +271,7 @@ class DefaultConfigStore(
         val configProfile = when (profileType) {
             Profile.Type.Personal -> ConfigProfile.Personal
             Profile.Type.Work -> ConfigProfile.Work
-            // The private space profile is not representable in the config format.
-            else -> return null
+            Profile.Type.Private -> ConfigProfile.Private
         }
         return Favorite(
             packageName = app.componentName.packageName,

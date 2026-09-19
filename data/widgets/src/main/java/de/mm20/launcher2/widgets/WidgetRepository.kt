@@ -7,6 +7,7 @@ import de.mm20.launcher2.database.AppDatabase
 import de.mm20.launcher2.database.entities.WidgetEntity
 import de.mm20.launcher2.ktx.jsonObjectOf
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -38,6 +39,19 @@ internal class WidgetRepositoryImpl(
 ) : WidgetRepository {
 
     private val scope = CoroutineScope(Job() + Dispatchers.Default)
+
+    // Fork addition (Phase 2 config reload): one ordered writer for full
+    // replacements. Both set() and setAwaited() enqueue at call time, so a
+    // fire-and-forget set(A) issued before setAwaited(B) can never land after
+    // B and undo it; setAwaited() returns once its own entry has committed.
+    private val writes = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for (write in writes) write()
+        }
+    }
+
     override fun get(parent: UUID?, limit: Int, offset: Int): Flow<List<Widget>> {
         val dao = database.widgetDao()
         return if (parent == null) {
@@ -72,14 +86,21 @@ internal class WidgetRepositoryImpl(
     }
 
     override fun set(widgets: List<Widget>, parentId: UUID?) {
-        scope.launch {
-            setInternal(widgets, parentId)
-        }
+        writes.trySend { setInternal(widgets, parentId) }
     }
 
     // Fork addition (Phase 2 config reload): awaited variant, see interface.
     override suspend fun setAwaited(widgets: List<Widget>, parentId: UUID?) {
-        setInternal(widgets, parentId)
+        val done = CompletableDeferred<Unit>()
+        writes.trySend {
+            try {
+                setInternal(widgets, parentId)
+                done.complete(Unit)
+            } catch (e: Throwable) {
+                done.completeExceptionally(e)
+            }
+        }
+        done.await()
     }
 
     private suspend fun setInternal(widgets: List<Widget>, parentId: UUID?) {

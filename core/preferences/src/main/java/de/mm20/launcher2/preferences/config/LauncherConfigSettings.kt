@@ -71,7 +71,7 @@ internal class LauncherConfigSettingsImpl(
                 },
                 dockEnabled = data.homeScreenDock,
                 widgetsEnabled = data.homeScreenWidgets,
-                clockStyle = data.clockWidgetStyle.toClockStyle() ?: ClockStyle.Digital1,
+                clockStyle = data.clockWidgetStyle.toClockStyle(),
                 clockFillHeight = data.clockWidgetFillHeight,
             ),
             transparenciesId = data.uiTransparenciesId,
@@ -142,7 +142,8 @@ internal class LauncherConfigSettingsImpl(
             ClockWidgetStyleEnum.Segment -> ClockStyle.Segment
             ClockWidgetStyleEnum.Empty -> ClockStyle.Empty
             // A custom (third-party app) clock widget is not representable in
-            // the config format; the reader falls back to ClockStyle.Digital1.
+            // the config format: reported as null so read-back stays honest and
+            // any configured style counts as a difference.
             ClockWidgetStyleEnum.Custom -> null
         }
     }

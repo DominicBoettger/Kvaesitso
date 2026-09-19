@@ -69,7 +69,8 @@ class ConfigIngestProvider : ContentProvider() {
         if (!dir.isDirectory && !dir.mkdirs()) {
             throw FileNotFoundException("Could not create ${dir.absolutePath}")
         }
-        val tmp = tempFileFor(target)
+        sweepStaleUploads(dir)
+        val tmp = newTempFile(dir)
         return ParcelFileDescriptor.open(
             tmp,
             ParcelFileDescriptor.MODE_WRITE_ONLY or
@@ -99,8 +100,23 @@ class ConfigIngestProvider : ContentProvider() {
         return true
     }
 
-    internal fun tempFileFor(target: File): File =
-        File(target.parentFile, "${target.name}.$IngestTmpSuffix")
+    /**
+     * One temp file per upload, so concurrent writers never truncate each
+     * other and the close of one never renames the other's bytes.
+     */
+    internal fun newTempFile(dir: File): File =
+        File.createTempFile("${ConfigLocation.ConfigFileName}.", ".$IngestTmpSuffix", dir)
+
+    /**
+     * Removes uploads whose writer died without closing (no commit ever
+     * happens for them). Anything older than [StaleUploadMs] cannot be an
+     * upload in flight.
+     */
+    internal fun sweepStaleUploads(dir: File, now: Long = System.currentTimeMillis()) {
+        dir.listFiles { f -> f.isFile && f.name.endsWith(".$IngestTmpSuffix") }
+            ?.filter { now - it.lastModified() > StaleUploadMs }
+            ?.forEach { it.delete() }
+    }
 
     override fun getType(uri: Uri): String? = null
 
@@ -134,6 +150,7 @@ class ConfigIngestProvider : ContentProvider() {
     companion object {
         const val AuthoritySuffix = ".config-ingest"
         internal const val IngestTmpSuffix = "ingest"
+        internal const val StaleUploadMs = 10 * 60 * 1000L
         private const val TAG = "ConfigIngestProvider"
     }
 }

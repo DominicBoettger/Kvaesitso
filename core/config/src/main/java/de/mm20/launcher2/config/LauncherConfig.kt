@@ -72,6 +72,10 @@ enum class Profile {
 
     @SerialName("work")
     Work,
+
+    /** Private Space; treated as just another profile for config purposes (ADR 0006). */
+    @SerialName("private")
+    Private,
 }
 
 @Serializable

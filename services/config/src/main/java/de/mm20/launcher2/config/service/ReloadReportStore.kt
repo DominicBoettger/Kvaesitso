@@ -15,8 +15,9 @@ import java.io.IOException
  * (`files/config/last-reload-report.json`), so the read-back provider
  * (next milestone) can serve the diagnostics of the last reload.
  *
- * Writes are atomic (write to a temp file, then rename). A missing or
- * corrupt report reads back as null.
+ * Writes are atomic (write to a temp file, then rename); a failed rename
+ * keeps the previous report and throws. A missing or corrupt report reads
+ * back as null.
  */
 class ReloadReportStore(
     context: Context,
@@ -31,9 +32,10 @@ class ReloadReportStore(
         val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeText(ConfigParser.json.encodeToString(ReloadReport.serializer(), report))
         if (!tmp.renameTo(file)) {
-            // Fall back to a direct write if rename is not possible.
-            file.writeText(ConfigParser.json.encodeToString(ReloadReport.serializer(), report))
+            // Never write the shared file in place: a concurrent provider query
+            // could read a torn report. Keep the previous one and fail loudly.
             tmp.delete()
+            throw IOException("Could not replace ${file.name}")
         }
     }
 

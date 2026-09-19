@@ -13,7 +13,12 @@ data class ConfigState(
     val dockFavorites: List<Favorite> = emptyList(),
     val widgetsEnabled: Boolean = false,
     val widgets: List<BuiltinWidget> = emptyList(),
-    val clockStyle: ClockStyle = ClockStyle.Digital1,
+    /**
+     * Null when the launcher shows a clock the config format cannot express
+     * (a custom app-widget clock). Any configured style then differs from it,
+     * so convergence replaces the custom clock instead of assuming a match.
+     */
+    val clockStyle: ClockStyle? = ClockStyle.Digital1,
     val clockFillHeight: Boolean = false,
 )
 

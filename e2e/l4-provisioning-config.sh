@@ -69,6 +69,7 @@ die(){ c '1;31' " x $*" >&2; exit 1; }
 [ -d "$GOS_REPO/emulator" ] || die "provisioning repo not found at $GOS_REPO (set GOS_REPO)"
 [ -f "$APK" ] || die "APK not found: $APK (build it or pass a path)"
 [ -f "$PROFILES_JSON" ] || die "config/profiles.json missing in $GOS_REPO"
+[ -f "$GOS_REPO/config/features.json" ] || die "config/features.json missing in $GOS_REPO"
 [ -f "$GOS_REPO/provision/00-profiles.sh" ] || die "provision/00-profiles.sh missing in $GOS_REPO"
 [ -f "$GOS_REPO/provision/45-launcher-config.sh" ] || die "provision/45-launcher-config.sh missing in $GOS_REPO"
 command -v jq >/dev/null || die "jq not found (required for config assertions)"
@@ -353,11 +354,14 @@ assert_jq "$override_eff" \
   '.appearance.transparency.background == 0.42' \
   "profile '$OVERRIDE_KEY' sees the isolation override"
 
+BASE_BACKGROUND="$(jq -e '.appearance.transparency.background' "$LAUNCHER_CFG_DIR/$BASE_KEY.json")" \
+  || die "could not read appearance.transparency.background from $LAUNCHER_CFG_DIR/$BASE_KEY.json"
+[ "$BASE_BACKGROUND" != "0.42" ] || die "isolation check needs a base value other than the override (0.42)"
 base_eff="$(query_json config "$BASE_UID")" \
   || die "profile '$BASE_KEY': /config not served during isolation check"
 assert_jq "$base_eff" \
-  '.appearance.transparency.background == 0.31' \
-  "profile '$BASE_KEY' keeps the generated value while '$OVERRIDE_KEY' is overridden"
+  ".appearance.transparency.background == $BASE_BACKGROUND" \
+  "profile '$BASE_KEY' keeps the generated value ($BASE_BACKGROUND) while '$OVERRIDE_KEY' is overridden"
 ok "per-user isolation: '$OVERRIDE_KEY' changed, '$BASE_KEY' unchanged"
 
 ok "L4 provisioning-config passed"

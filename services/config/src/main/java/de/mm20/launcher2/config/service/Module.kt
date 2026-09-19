@@ -18,6 +18,7 @@ val configModule = module {
     factory<ProfileResolver> { ProfileManagerProfileResolver(get()) }
     factory<ConfigStore> { DefaultConfigStore(get(), get(), get(), get(), get(), get()) }
     single { ReloadReportStore(androidContext()) }
-    factory { ConfigReloader(get(), get()) }
+    // One reloader, one mutex: watcher and receiver must serialize on it.
+    single { ConfigReloader(get(), get()) }
     single(createdAtStart = true) { ConfigWatcher(androidContext(), get(), get()).also { it.start() } }
 }
