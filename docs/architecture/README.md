@@ -36,7 +36,7 @@ reload, and integrated into a GrapheneOS multi-profile setup.
 | [0004](adr/0004-liquid-glass-design.md) | Liquid Glass as the single visual direction |
 | [0005](adr/0005-testing-strategy.md) | Test pyramid and AI-driven development harness |
 | [0006](adr/0006-grapheneos-integration.md) | GrapheneOS-specific integration and constraints |
-| [0007](adr/0007-fork-strategy.md) | Fork strategy and upstream relationship |
+| [0007](adr/0007-fork-strategy.md) | Fork strategy: hard fork, upstream as a source for cherry-picks |
 
 ## Implementation order
 

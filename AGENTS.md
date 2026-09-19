@@ -76,8 +76,10 @@ API 36 image). L4 stays manual/local.
 
 ## Fork conventions
 
-- Fork code lives in new, clearly named packages/files — minimal edits to
-  upstream files, marked where unavoidable.
+- Hard fork (ADR 0007, revised 2026-09-19): no merges from upstream, cherry-picks
+  by hand where worth it. Upstream files may be edited, modules removed, packages
+  renamed; structure is chosen for the fork's maintainability, not for merge
+  friendliness. `upstream` remote stays for reading (`upstream-main`).
 - Support matrix: current GrapheneOS on Pixel devices (candybar + Fold, cover and
   inner display). minSdk 36. Old-Android compat code is deleted, not maintained.
 - No Play Services dependencies, no telemetry.
