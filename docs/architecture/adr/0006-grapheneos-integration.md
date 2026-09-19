@@ -30,8 +30,12 @@ That removes generic-Android constraints and adds a few specific ones.
   nightly `org.andashi.home.nightly`; the release build carries no suffix). Display
   name "Andashi Home". Decided 2026-09-19 together with the organization
   (andashi, andashi.org, `github.com/andashi/home`). Content authorities and the
-  reload action derive from it (`org.andashi.home.state`,
-  `org.andashi.home.config-ingest`, `org.andashi.home.action.RELOAD_CONFIG`).
+  reload action derive from the *effective* applicationId via
+  `${applicationId}` in the manifest, so the release build serves
+  `org.andashi.home.state`, `org.andashi.home.config-ingest` and
+  `org.andashi.home.action.RELOAD_CONFIG`, while a debug build serves
+  `org.andashi.home.debug.state` and so on. Scripts derive every identifier
+  from the package name they target; the e2e scripts do exactly that.
   Kotlin packages keep the upstream namespace for now; renaming them is cosmetic
   and part of the module diet (issue #20). Coexisting with/upgrading over upstream
   installs is not a goal; provisioning creates fresh profiles anyway. Side effect:

@@ -113,10 +113,9 @@ steps.
 Early. The configuration system is complete for provisioning parity and
 verified end to end on a GrapheneOS emulator, as the unrooted shell, across six
 profiles. The launcher still looks like its origin; the new home surface is not
-built yet. Identity (`org.andashi.home`), signing and the first run on real
-hardware are the open items before daily use
-([#19](https://github.com/andashi/home/issues/19),
-[#21](https://github.com/andashi/home/issues/21)).
+built yet. Signing, release publishing and the first run on real hardware are
+the open items before daily use
+([#21](https://github.com/andashi/home/issues/21)).
 
 ## Building and testing
 
