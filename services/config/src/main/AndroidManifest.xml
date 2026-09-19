@@ -1,10 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application>
-        <!-- Explicit adb trigger; the shell user can target non-exported components. -->
+        <!-- Explicit adb trigger. Exported: the unrooted shell cannot reach a
+             non-exported receiver. Sender must hold WRITE_SECURE_SETTINGS
+             (shell/system only). -->
         <receiver
             android:name=".ReloadConfigReceiver"
-            android:exported="false">
+            android:exported="true"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS">
             <intent-filter>
                 <action android:name="${applicationId}.action.RELOAD_CONFIG" />
             </intent-filter>
@@ -15,6 +18,17 @@
             android:name=".ConfigStateProvider"
             android:authorities="${applicationId}.state"
             android:exported="true"
+            android:grantUriPermissions="false" />
+
+        <!-- Write-only ingest for provisioning (`content write`, per user).
+             adb push cannot reach a secondary user's storage, a provider can.
+             WRITE_SECURE_SETTINGS is held by shell/root only; the provider
+             additionally checks the calling uid (ADR 0003). -->
+        <provider
+            android:name=".ConfigIngestProvider"
+            android:authorities="${applicationId}.config-ingest"
+            android:exported="true"
+            android:writePermission="android.permission.WRITE_SECURE_SETTINGS"
             android:grantUriPermissions="false" />
     </application>
 </manifest>

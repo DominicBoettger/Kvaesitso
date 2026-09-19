@@ -13,20 +13,24 @@
 #   2. runs provision/00-profiles.sh against the test instance so all
 #      configured zones/profiles exist (stopped profiles are temporarily
 #      started by that step - expected, see 00-profiles.sh)
-#   3. installs the Kvaesitso fork debug APK into user 0
+#   3. drops root (`adb unroot`): release GrapheneOS has no adb root, so the
+#      provisioning transport must work as the plain shell user; then
+#      installs the Kvaesitso fork debug APK into user 0
 #   4. for every non-managed profile from config/profiles.json: resolves the
 #      uid, starts evicted users, and makes sure the debug package is
 #      installed for that user (pm install-existing --user)
 #   5. runs LAUNCHER_CONFIG_KEY=kvaesitso-fork provision/45-launcher-config.sh
-#      and requires exit 0 - the step itself pushes the generated
-#      config/launcher/<profile>.json files, broadcasts RELOAD_CONFIG, polls
-#      diagnostics and verifies read-back per profile
+#      and requires exit 0 - the step itself writes the generated
+#      config/launcher/<profile>.json files through the ingest provider
+#      (`content write --user`; adb push cannot reach a secondary user's
+#      storage, ADR 0003 §1a), broadcasts RELOAD_CONFIG, polls diagnostics
+#      and verifies read-back per profile
 #   6. per-profile read-back check: for each non-managed profile, queries
 #      content://<pkg>.state/config with --user <uid> and verifies it
 #      semantically against the generated config file, then queries
 #      /diagnostics and requires success with the sha256 of the generated
 #      file
-#   7. per-user isolation check: after the real provisioning step, pushes a
+#   7. per-user isolation check: after the real provisioning step, writes a
 #      deliberately distinct config into ONE profile and asserts that this
 #      profile changes while another profile keeps the generated value
 #   8. stops the instance and releases the lock
@@ -53,6 +57,7 @@ SNAPSHOT="${SNAPSHOT:-clean}"
 APK="${1:-$(dirname "$0")/../app/app/build/outputs/apk/default/debug/app-default-debug.apk}"
 PKG="de.mm20.launcher2.debug"
 STATE_URI="content://$PKG.state"
+INGEST_URI="content://$PKG.config-ingest/launcher.json"
 PROFILES_JSON="$GOS_REPO/config/profiles.json"
 LAUNCHER_CFG_DIR="$GOS_REPO/config/launcher"
 WORK="$(mktemp -d)"
@@ -69,6 +74,14 @@ die(){ c '1;31' " x $*" >&2; exit 1; }
 command -v jq >/dev/null || die "jq not found (required for config assertions)"
 
 cleanup() {
+  local rc=$?
+  # A failed run leaves its evidence in logcat and nowhere else: dump the
+  # launcher's config tags before the read-only instance is discarded.
+  if [ "$rc" -ne 0 ]; then
+    printf '\n--- launcher logcat (config tags, last 80 lines) ---\n' >&2
+    adb -s "$SERIAL" logcat -d -s ReloadConfigReceiver:* ConfigWatcher:* ConfigIngestProvider:* ConfigReloader:* AndroidRuntime:E ActivityManager:W 2>/dev/null \
+      | tr -d '\r' | tail -n 80 >&2 || true
+  fi
   (cd "$GOS_REPO" && SERIAL="$SERIAL" emulator/run.sh stop) >/dev/null 2>&1 || true
   (cd "$GOS_REPO" && emulator/device-lock.sh release l4-provisioning-config) >/dev/null 2>&1 || true
   rm -rf "$WORK"
@@ -123,6 +136,31 @@ user_running_uid() { # $1 = uid
   esac
 }
 
+# The authoritative user state. `pm list users` still says "running" for a
+# user that is being evicted, so it cannot decide whether a provider is
+# reachable; only RUNNING_UNLOCKED can.
+user_state() { # $1 = uid
+  adb -s "$SERIAL" shell am get-started-user-state "$1" </dev/null 2>/dev/null | tr -d '\r'
+}
+
+# Background-starts a user that is not RUNNING_UNLOCKED; a stopped or locked
+# user has no provider to write to or query. The emulator keeps at most three
+# users running, so starting one zone evicts another - every per-user step
+# has to re-check right before it talks to the provider.
+ensure_user_running() { # $1 = uid
+  local state
+  state="$(user_state "$1")"
+  case "$state" in *RUNNING_UNLOCKED*) return 0 ;; esac
+  log "user $1 is '${state:-stopped}' - starting in background"
+  adb -s "$SERIAL" shell am start-user -w "$1" </dev/null >/dev/null \
+    || die "user $1 could not be started"
+  state="$(user_state "$1")"
+  case "$state" in
+    *RUNNING_UNLOCKED*) ;;
+    *) die "user $1 is '$state' after start-user, expected RUNNING_UNLOCKED" ;;
+  esac
+}
+
 pkg_installed_for_user() { # $1 = pkg, $2 = uid
   local out
   out="$(adb -s "$SERIAL" shell pm list packages --user "$2" 2>/dev/null | tr -d '\r')" || return 1
@@ -149,10 +187,14 @@ assert_jq() { # $1 = json, $2 = jq filter, $3 = description
   fi
 }
 
-push_config_user() { # $1 = local file, $2 = uid
-  local target_dir="/storage/emulated/$2/Android/data/$PKG/files/config"
-  adb -s "$SERIAL" shell "mkdir -p '$target_dir'" >/dev/null
-  adb -s "$SERIAL" push "$1" "$target_dir/launcher.json" >/dev/null
+# Streams the file into the target user's ingest provider. `content write`
+# exits 0 even when the provider throws (it only prints the exception), so
+# any output at all is a failure. adb shell v2 is binary-safe.
+write_config_user() { # $1 = local file, $2 = uid
+  local out
+  out="$(adb -s "$SERIAL" shell content write --user "$2" --uri "$INGEST_URI" < "$1" 2>&1 | tr -d '\r')" \
+    || { printf '%s\n' "$out" >&2; die "content write failed for user $2"; }
+  [ -z "$out" ] || { printf '%s\n' "$out" >&2; die "content write reported an error for user $2"; }
 }
 
 broadcast_user() { # $1 = uid
@@ -196,7 +238,14 @@ log "running provision/00-profiles.sh against $SERIAL"
   || die "00-profiles.sh failed"
 ok "profiles reconciled"
 
-# --- 3. install the debug APK into user 0 --------------------------------
+# --- 3. drop root, install the debug APK into user 0 ---------------------
+
+# run.sh start leaves adbd rooted (userdebug). Release GrapheneOS has no adb
+# root, so from here on everything must work as the plain shell user.
+adb -s "$SERIAL" unroot >/dev/null 2>&1 || true
+adb -s "$SERIAL" wait-for-device
+[ "$(adb -s "$SERIAL" shell id -u | tr -d '\r')" = "2000" ] || die "adb is not running as shell after unroot"
+ok "adb running as unrooted shell"
 
 log "installing $(basename "$APK") into user 0"
 install_out="$(adb -s "$SERIAL" install -r "$APK" 2>&1)" || { printf '%s\n' "$install_out" >&2; die "adb install failed"; }
@@ -211,17 +260,16 @@ ok "package installed: $PKG"
 
 # --- 4. make the package available in every non-managed profile ----------
 
+# Profile keys as an array: adb shell inside a `while read` loop would eat the
+# loop's remaining stdin and silently end it after the first profile.
+mapfile -t PROFILE_KEYS < <(non_managed_profile_keys)
+[ "${#PROFILE_KEYS[@]}" -ge 2 ] || die "need at least two non-managed profiles (isolation check)"
+
 log "ensuring $PKG is installed for every non-managed profile"
-while read -r key; do
-  [ -z "$key" ] && continue
+for key in "${PROFILE_KEYS[@]}"; do
   uid="$(resolve_uid "$key")"
   [ -n "$uid" ] || die "profile '$key': could not resolve uid (00-profiles.sh should have created it)"
-
-  if ! user_running_uid "$uid"; then
-    log "profile '$key' (user $uid) is evicted - starting in background"
-    adb -s "$SERIAL" shell am start-user -w "$uid" >/dev/null \
-      || die "profile '$key' (user $uid) could not be started"
-  fi
+  ensure_user_running "$uid"
 
   if pkg_installed_for_user "$PKG" "$uid"; then
     ok "profile '$key' (user $uid): $PKG already installed"
@@ -236,7 +284,7 @@ while read -r key; do
   pkg_installed_for_user "$PKG" "$uid" \
     || die "profile '$key' (user $uid): $PKG still not installed after install-existing"
   ok "profile '$key' (user $uid): $PKG installed via install-existing"
-done < <(non_managed_profile_keys)
+done
 
 # --- 5. run the real provisioning step ------------------------------------
 
@@ -246,15 +294,15 @@ log "running provision/45-launcher-config.sh (LAUNCHER_CONFIG_KEY=kvaesitso-fork
 ok "45-launcher-config.sh converged all profiles (exit 0)"
 
 # --- 6. per-profile read-back verification --------------------------------
-# Each user's provider instance must serve the config that provisioning pushed
+# Each user's provider instance must serve the config that provisioning wrote
 # for that user. The checked-in files are currently identical, so this section
 # proves every profile converged; the distinct-value isolation check is below.
 
-log "verifying per-user read-back isolation"
-while read -r key; do
-  [ -z "$key" ] && continue
+log "verifying per-user read-back"
+for key in "${PROFILE_KEYS[@]}"; do
   uid="$(resolve_uid "$key")"
   [ -n "$uid" ] || die "profile '$key': could not resolve uid"
+  ensure_user_running "$uid"
   cfgfile="$LAUNCHER_CFG_DIR/$key.json"
   [ -f "$cfgfile" ] || die "generated config missing: $cfgfile (run config/gen-launcher.sh)"
   want_sha="$(sha256sum "$cfgfile" | cut -d' ' -f1)"
@@ -274,15 +322,13 @@ while read -r key; do
     die "profile '$key' (user $uid): /config differs from generated file in: $mism"; }
 
   ok "profile '$key' (user $uid): /config matches generated file, diagnostics sha256 ${want_sha:0:12}..."
-done < <(non_managed_profile_keys)
+done
 
 # --- 7. per-user isolation with a deliberately distinct override ----------
 # The generated profile files are currently identical, so the previous section
-# cannot distinguish a cross-user leak. Push one changed config into exactly
+# cannot distinguish a cross-user leak. Write one changed config into exactly
 # one profile and verify that only that profile's provider sees it.
 
-mapfile -t PROFILE_KEYS < <(non_managed_profile_keys)
-[ "${#PROFILE_KEYS[@]}" -ge 2 ] || die "need at least two non-managed profiles for the isolation check"
 BASE_KEY="${PROFILE_KEYS[0]}"
 OVERRIDE_KEY="${PROFILE_KEYS[1]}"
 BASE_UID="$(resolve_uid "$BASE_KEY")"
@@ -294,8 +340,10 @@ jq '.appearance.transparency.background = 0.42' \
   "$LAUNCHER_CFG_DIR/$OVERRIDE_KEY.json" > "$OVERRIDE_CONFIG"
 OVERRIDE_SHA="$(sha256sum "$OVERRIDE_CONFIG" | cut -d' ' -f1)"
 
-log "pushing distinct isolation config to profile '$OVERRIDE_KEY' (user $OVERRIDE_UID)"
-push_config_user "$OVERRIDE_CONFIG" "$OVERRIDE_UID"
+log "writing distinct isolation config to profile '$OVERRIDE_KEY' (user $OVERRIDE_UID)"
+ensure_user_running "$OVERRIDE_UID"
+ensure_user_running "$BASE_UID"
+write_config_user "$OVERRIDE_CONFIG" "$OVERRIDE_UID"
 broadcast_user "$OVERRIDE_UID"
 wait_diagnostics_sha "$OVERRIDE_UID" "$OVERRIDE_SHA" 30
 

@@ -10,10 +10,12 @@
 #      instance (emulator-5556, own qcow2 overlays under
 #      <gos-repo>/emulator/instances/test) from the `clean` snapshot,
 #      installs the debug APK
-#   2. pushes a known JSONC config (icons, transparency, search bar, dock,
+#   2. writes a known JSONC config (icons, transparency, search bar, dock,
 #      widgets, clock; empty favorites so no installed-package assumptions)
-#   3. proves the explicit, non-exported ReloadConfigReceiver is reachable
-#      from the shell: the watcher startup-check is allowed to settle first
+#      through the shell-gated ingest provider (`content write`), the
+#      provisioning transport (ADR 0003 §1a)
+#   3. proves the explicit, shell-gated ReloadConfigReceiver is reachable
+#      from the unrooted shell: the watcher startup-check is allowed to settle first
 #      (trigger "startup-check"), then the broadcast must produce a report
 #      with trigger "broadcast" for the same config hash
 #   4. reads back content://<pkg>.state/config and asserts the effective
@@ -25,27 +27,20 @@
 #      config remains intact
 #   7. pushes unknown keys in an otherwise valid config and asserts warning
 #      diagnostics with a successful apply
-#   8. restores the valid config
+#   8. restores the valid config with plain `adb push` (user 0 only): the
+#      interactive dotfile path, proving the file watcher reacts to a push
+#      exactly like to an ingest
 #
 # Report correlation: ReloadReport has no id/timestamp, so a new reload is
 # detected via trigger and/or configSha256 transitions. Before every explicit
-# broadcast the script waits for the file-watcher report of the push (trigger
+# broadcast the script waits for the file-watcher report of the write (trigger
 # "file-watcher"), which both settles the watcher and validates it.
 #
-# TODO(per-user isolation, scenario requirement 9): NOT covered here yet.
-# Sketch for a future extension, pending live validation on the emulator:
-#   - `pm create-user` + `am switch-user` on a running instance is known to
-#     be fragile headless (lock screen, user switch races with boot)
-#   - install the APK for the new user (`adb install --user <id> -r`),
-#     push a *different* config to
-#     /storage/emulated/<id>/Android/data/<pkg>/files/config/launcher.json,
-#     broadcast with `--user <id>`, and assert via
-#     `content query --user <id>` that /config differs per user while user 0
-#     stays untouched
-#   - the provider is per-user (android:exported without permission, resolved
-#     in the calling user's package instance), so read-back isolation should
-#     hold by construction — but that is exactly what a test must prove,
-#     not assume
+# Everything here runs as the unrooted shell (`adb unroot` after boot), so
+# the result holds for release GrapheneOS, which has no `adb root`.
+#
+# Per-user isolation is covered by e2e/l4-provisioning-config.sh, which
+# drives the real provisioning step against every profile.
 #
 # The emulator harness (run.sh, device-lock.sh, snapshots, overlays) lives in
 # the provisioning repo — see docs/architecture/adr/0005-testing-strategy.md.
@@ -66,6 +61,7 @@ PKG="de.mm20.launcher2.debug"
 RECEIVER="$PKG/de.mm20.launcher2.config.service.ReloadConfigReceiver"
 ACTION="$PKG.action.RELOAD_CONFIG"
 STATE_URI="content://$PKG.state"
+INGEST_URI="content://$PKG.config-ingest/launcher.json"
 REMOTE_DIR="/storage/emulated/0/Android/data/$PKG/files/config"
 REMOTE_CONFIG="$REMOTE_DIR/launcher.json"
 
@@ -80,6 +76,14 @@ command -v jq >/dev/null || die "jq not found (required for config assertions)"
 WORK="$(mktemp -d)"
 
 cleanup() {
+  local rc=$?
+  # A failed run leaves its evidence in logcat and nowhere else: dump the
+  # launcher's config tags before the read-only instance is discarded.
+  if [ "$rc" -ne 0 ]; then
+    printf '\n--- launcher logcat (config tags, last 80 lines) ---\n' >&2
+    adb -s "$SERIAL" logcat -d -s ReloadConfigReceiver:* ConfigWatcher:* ConfigIngestProvider:* ConfigReloader:* AndroidRuntime:E ActivityManager:W 2>/dev/null \
+      | tr -d '\r' | tail -n 80 >&2 || true
+  fi
   (cd "$GOS_REPO" && SERIAL="$SERIAL" emulator/run.sh stop) >/dev/null 2>&1 || true
   (cd "$GOS_REPO" && emulator/device-lock.sh release l4-config) >/dev/null 2>&1 || true
   rm -rf "$WORK"
@@ -130,6 +134,18 @@ assert_jq() { # $1 = json, $2 = jq filter, $3 = description
   fi
 }
 
+# The provisioning transport: stream the file into the ingest provider.
+# `content write` exits 0 even when the provider throws (it only prints the
+# exception), so any output at all is a failure. adb shell v2 is binary-safe.
+write_config() { # $1 = local file
+  local out
+  out="$(adb -s "$SERIAL" shell content write --uri "$INGEST_URI" < "$1" 2>&1 | tr -d '\r')" \
+    || { printf '%s\n' "$out" >&2; die "content write failed"; }
+  [ -z "$out" ] || { printf '%s\n' "$out" >&2; die "content write reported an error"; }
+}
+
+# The interactive dotfile path (owner only - a secondary user's storage is
+# not reachable for the shell, see ADR 0003 §1a).
 push_config() { # $1 = local file
   adb -s "$SERIAL" shell "mkdir -p '$REMOTE_DIR'" >/dev/null
   adb -s "$SERIAL" push "$1" "$REMOTE_CONFIG" >/dev/null
@@ -149,7 +165,7 @@ reload_broadcast() {
 # watcher and avoids watcher/broadcast report races), then sends the explicit
 # broadcast and waits for the resulting report.
 settle_then_broadcast() { # $1 = local config file, $2 = sha256, $3 = stage name
-  push_config "$1"
+  write_config "$1"
   log "$3: waiting for file-watcher reload (hash ${2:0:12}...)"
   wait_report ".configSha256 == \"$2\" and .trigger == \"file-watcher\"" 30 \
     "$3: file-watcher report"
@@ -255,6 +271,12 @@ EFFECTIVE_FILTER='
 log "booting $SERIAL from snapshot '$SNAPSHOT' (overlays: $OVERLAY_DIR)"
 (cd "$GOS_REPO" && SNAPSHOT="$SNAPSHOT" emulator/run.sh start)
 
+# Release GrapheneOS has no adb root; everything below must work as shell.
+adb -s "$SERIAL" unroot >/dev/null 2>&1 || true
+adb -s "$SERIAL" wait-for-device
+[ "$(adb -s "$SERIAL" shell id -u | tr -d '\r')" = "2000" ] || die "adb is not running as shell after unroot"
+ok "adb running as unrooted shell"
+
 log "installing $(basename "$APK")"
 install_out="$(adb -s "$SERIAL" install -r "$APK" 2>&1)" || { printf '%s\n' "$install_out" >&2; die "adb install failed"; }
 case "$install_out" in
@@ -266,25 +288,27 @@ adb -s "$SERIAL" shell pm list packages | tr -d '\r' | grep -x "package:$PKG" >/
   || die "$PKG not installed"
 ok "package installed: $PKG"
 
-# --- 2./3. push known config, prove the explicit broadcast works -------
+# --- 2./3. write known config, prove the explicit broadcast works ------
 
-push_config "$VALID_CONFIG"
+write_config "$VALID_CONFIG"
 
 # The first provider query starts the app process (the provider is exported);
 # the watcher's startup drift check then reloads on its own. Letting it settle
 # first makes the subsequent broadcast unambiguous: trigger must flip from
 # "startup-check" to "broadcast", which only the explicit receiver can cause.
 # Generous timeout: cold process start plus Koin on the emulator.
-log "waiting for watcher startup-check to settle (starts the app process)"
-wait_report ".success == true and .configSha256 == \"$H_VALID\" and .trigger == \"startup-check\"" 90 \
-  "startup-check report for valid config"
-ok "startup-check applied the pushed config"
+# The ingest itself already started the process (the provider is exported),
+# so the watcher may have caught the rename: accept either trigger.
+log "waiting for the first reload of the ingested config (starts the app process)"
+wait_report ".success == true and .configSha256 == \"$H_VALID\" and (.trigger == \"startup-check\" or .trigger == \"file-watcher\")" 90 \
+  "startup-check or file-watcher report for valid config"
+ok "ingested config applied (trigger=$(jq -r .trigger <<<"$LAST_REPORT"))"
 
-log "broadcasting explicit reload to non-exported receiver"
+log "broadcasting explicit reload to the shell-gated receiver"
 reload_broadcast
 wait_report ".success == true and .configSha256 == \"$H_VALID\" and .trigger == \"broadcast\"" 30 \
   "broadcast report for valid config"
-ok "explicit broadcast reached the non-exported receiver (trigger=broadcast)"
+ok "explicit broadcast reached the receiver as unrooted shell (trigger=broadcast)"
 
 # --- 4. assert the effective config ------------------------------------
 
@@ -293,13 +317,13 @@ effective="$(query_json config)" || die "could not query /config"
 assert_jq "$effective" "$EFFECTIVE_FILTER" "effective config matches pushed fixture"
 ok "effective config matches (icons, transparency, search bar, dock, widgets, clock)"
 
-# --- 5. re-push unchanged config: no mutations --------------------------
+# --- 5. re-write unchanged config: no mutations -------------------------
 
-settle_then_broadcast "$VALID_CONFIG" "$H_VALID" "re-push"
+settle_then_broadcast "$VALID_CONFIG" "$H_VALID" "re-write"
 assert_jq "$LAST_REPORT" \
   '.success == true and ((.appliedMutations // []) == [])' \
-  "re-push of unchanged config yields success with no applied mutations"
-ok "unchanged re-push: successful, no applied mutations"
+  "re-write of unchanged config yields success with no applied mutations"
+ok "unchanged re-write: successful, no applied mutations"
 
 # --- 6. malformed JSON: failed report, state intact --------------------
 
@@ -325,10 +349,14 @@ effective="$(query_json config)" || die "could not query /config"
 assert_jq "$effective" "$EFFECTIVE_FILTER" "effective config unchanged by unknown keys"
 ok "effective config unchanged (unknown keys ignored)"
 
-# --- 8. restore a valid config -----------------------------------------
+# --- 8. restore a valid config via adb push (interactive dotfile path) ---
 
-settle_then_broadcast "$VALID_CONFIG" "$H_VALID" "restore"
-assert_jq "$LAST_REPORT" '.success == true' "restore of valid config succeeds"
-ok "valid config restored"
+push_config "$VALID_CONFIG"
+log "restore: waiting for file-watcher reload of the pushed file (hash ${H_VALID:0:12}...)"
+wait_report ".success == true and .configSha256 == \"$H_VALID\" and .trigger == \"file-watcher\"" 30 \
+  "restore: file-watcher report after adb push"
+effective="$(query_json config)" || die "could not query /config"
+assert_jq "$effective" "$EFFECTIVE_FILTER" "effective config restored via adb push"
+ok "valid config restored via adb push (file watcher)"
 
 ok "L4 config passed"

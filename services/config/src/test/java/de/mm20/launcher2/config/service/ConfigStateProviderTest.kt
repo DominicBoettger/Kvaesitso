@@ -114,6 +114,40 @@ class ConfigStateProviderTest {
     }
 
     @Test
+    fun `query waits for Koin when it cold-starts the process`() {
+        stopKoin()
+        val starter = Thread {
+            Thread.sleep(150)
+            startKoin {
+                modules(
+                    module {
+                        single<ConfigStore> { store }
+                        single { reportStore }
+                    }
+                )
+            }
+        }.apply { start() }
+
+        val cursor = provider.query(uri("diagnostics"), null, null, null, null)
+
+        starter.join()
+        assertEquals(1, cursor.count)
+        cursor.close()
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun `query gives up when Koin never starts`() {
+        stopKoin()
+        provider.koinStartupTimeoutMs = 50
+        try {
+            provider.query(uri("diagnostics"), null, null, null, null)
+        } finally {
+            // Leave Koin running so tearDown's stopKoin has something to stop.
+            startKoin { modules(module { single<ConfigStore> { store }; single { reportStore } }) }
+        }
+    }
+
+    @Test
     fun `mime type is application json for both routes`() {
         assertEquals("application/json", provider.getType(uri("config")))
         assertEquals("application/json", provider.getType(uri("diagnostics")))

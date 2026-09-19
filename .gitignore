@@ -300,3 +300,5 @@ fabric.properties
 opencode.json
 .opencode/
 
+# Local Claude Code worktrees (machine-specific, never shared)
+.claude/worktrees/

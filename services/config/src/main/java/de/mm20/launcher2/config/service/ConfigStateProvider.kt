@@ -12,6 +12,7 @@ import de.mm20.launcher2.config.toLauncherConfig
 import kotlinx.coroutines.runBlocking
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
+import org.koin.core.context.GlobalContext
 
 /**
  * Fork addition (Phase 2, ADR 0003): read-only read-back provider, exported
@@ -35,12 +36,20 @@ import org.koin.core.component.inject
  *
  * Dependencies are resolved lazily: providers are created before
  * `Application.onCreate` has started Koin, so injecting in [onCreate] would
- * crash. By the time the first query arrives, Koin is up.
+ * crash. That is not enough on its own: Android publishes providers before
+ * `Application.onCreate` runs, so a query that cold-starts the process (a
+ * provisioning script after the launcher was killed under memory pressure,
+ * measured in the L4 provisioning run) arrives on a binder thread while Koin
+ * is still starting on the main thread. [query] therefore waits until its
+ * dependencies resolve, bounded by [koinStartupTimeoutMs].
  */
 class ConfigStateProvider : ContentProvider(), KoinComponent {
 
     private val configStore: ConfigStore by inject()
     private val reportStore: ReloadReportStore by inject()
+
+    /** Overridable for tests. */
+    internal var koinStartupTimeoutMs: Long = KoinStartupTimeoutMs
 
     override fun onCreate(): Boolean = true
 
@@ -51,6 +60,7 @@ class ConfigStateProvider : ContentProvider(), KoinComponent {
         selectionArgs: Array<out String>?,
         sortOrder: String?,
     ): Cursor {
+        awaitKoin()
         val payload = when (val path = uri.lastPathSegment) {
             PathConfig -> runBlocking {
                 ConfigParser.json.encodeToString(
@@ -99,7 +109,36 @@ class ConfigStateProvider : ContentProvider(), KoinComponent {
         throw UnsupportedOperationException("Config state is read-only: $uri")
     }
 
+    /**
+     * Blocks until the dependencies resolve. `startKoin` registers the global
+     * context *before* it loads the modules, so "Koin exists" is not enough;
+     * the definitions themselves must be there. Wall-clock on purpose: the
+     * binder thread really blocks here.
+     */
+    private fun awaitKoin() {
+        val deadline = System.nanoTime() + koinStartupTimeoutMs * 1_000_000
+        while (!dependenciesResolvable()) {
+            if (System.nanoTime() >= deadline) {
+                throw IllegalStateException(
+                    "Launcher did not finish starting within ${koinStartupTimeoutMs}ms; retry"
+                )
+            }
+            Thread.sleep(KoinPollIntervalMs)
+        }
+    }
+
+    private fun dependenciesResolvable(): Boolean {
+        val koin = GlobalContext.getOrNull() ?: return false
+        return try {
+            koin.getOrNull<ConfigStore>() != null && koin.getOrNull<ReloadReportStore>() != null
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     companion object {
+        const val KoinStartupTimeoutMs = 15_000L
+        private const val KoinPollIntervalMs = 10L
         const val PathConfig = "config"
         const val PathDiagnostics = "diagnostics"
         const val JsonMimeType = "application/json"
