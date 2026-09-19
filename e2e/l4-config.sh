@@ -20,14 +20,20 @@
 #      with trigger "broadcast" for the same config hash
 #   4. reads back content://<pkg>.state/config and asserts the effective
 #      fields with jq
-#   5. re-pushes the unchanged config and asserts the follow-up broadcast
+#   5. re-writes the unchanged config and asserts the follow-up broadcast
 #      report is successful with no applied mutations (watcher settled first)
-#   6. pushes malformed JSON and asserts a failed report with a
+#   6. writes a second config that changes EVERY section (icons off, other
+#      transparency values, search bar top, dock off, other widgets, other
+#      clock) and asserts the read-back shows the new values and the report
+#      lists every section as applied; then writes the first config again
+#      and asserts the read-back is back to the first values - the
+#      everyday case: an existing state is changed, not created
+#   7. writes malformed JSON and asserts a failed report with a
 #      "malformed-json" error diagnostic, and that the previous effective
 #      config remains intact
-#   7. pushes unknown keys in an otherwise valid config and asserts warning
+#   8. writes unknown keys in an otherwise valid config and asserts warning
 #      diagnostics with a successful apply
-#   8. restores the valid config with plain `adb push` (user 0 only): the
+#   9. restores the valid config with plain `adb push` (user 0 only): the
 #      interactive dotfile path, proving the file watcher reacts to a push
 #      exactly like to an ingest
 #
@@ -239,12 +245,39 @@ cat > "$UNKNOWN_KEYS_CONFIG" <<'EOF'
 }
 EOF
 
+# Every section differs from VALID_CONFIG, so converging from one to the
+# other must touch all of them and the read-back must flip completely.
+CHANGED_CONFIG="$WORK/changed.jsonc"
+cat > "$CHANGED_CONFIG" <<'EOF'
+{
+  "schemaVersion": 1,
+  "icons": {
+    "themed": false,
+    "enforceThemed": false,
+  },
+  "appearance": {
+    "transparency": {
+      "background": 0.2,
+      "surface": 0.3,
+      "elevatedSurface": 0.4,
+    },
+  },
+  "home": {
+    "searchBar": { "position": "top" },
+    "dock": { "enabled": false, "favorites": [] },
+    "widgets": { "enabled": true, "widgets": ["calendar", "notes", "apps"] },
+    "clock": { "style": "digital2", "fillHeight": false },
+  },
+}
+EOF
+
 MALFORMED_CONFIG="$WORK/malformed.jsonc"
 printf '{ "schemaVersion": 1, "icons": { not json at all\n' > "$MALFORMED_CONFIG"
 
 H_VALID="$(sha256sum "$VALID_CONFIG" | cut -d' ' -f1)"
 H_UNKNOWN="$(sha256sum "$UNKNOWN_KEYS_CONFIG" | cut -d' ' -f1)"
 H_MALFORMED="$(sha256sum "$MALFORMED_CONFIG" | cut -d' ' -f1)"
+H_CHANGED="$(sha256sum "$CHANGED_CONFIG" | cut -d' ' -f1)"
 
 # The /config read-back is fully populated (ConfigStateMapper), so these are
 # the exact effective values after applying VALID_CONFIG.
@@ -262,6 +295,29 @@ EFFECTIVE_FILTER='
   and (.home.widgets.widgets | sort) == ["music", "weather"]
   and .home.clock.style == "analog"
   and .home.clock.fillHeight == true
+'
+
+CHANGED_FILTER='
+  .schemaVersion == 1
+  and .icons.themed == false
+  and .icons.enforceThemed == false
+  and .appearance.transparency.background == 0.2
+  and .appearance.transparency.surface == 0.3
+  and .appearance.transparency.elevatedSurface == 0.4
+  and .home.searchBar.position == "top"
+  and .home.dock.enabled == false
+  and .home.dock.favorites == []
+  and .home.widgets.enabled == true
+  and (.home.widgets.widgets | sort) == ["apps", "calendar", "notes"]
+  and .home.clock.style == "digital2"
+  and .home.clock.fillHeight == false
+'
+
+# The sections a full VALID <-> CHANGED convergence must report as applied.
+ALL_SECTIONS_FILTER='
+  ((.appliedMutations // []) | sort) ==
+  ["appearance.transparency", "home.clock", "home.dock.enabled", "home.searchBar",
+   "home.widgets.widgets", "icons"]
 '
 
 # --- 1. boot + install -------------------------------------------------
@@ -325,7 +381,32 @@ assert_jq "$LAST_REPORT" \
   "re-write of unchanged config yields success with no applied mutations"
 ok "unchanged re-write: successful, no applied mutations"
 
-# --- 6. malformed JSON: failed report, state intact --------------------
+# --- 6. change every section, then change it back ----------------------
+
+settle_then_broadcast "$CHANGED_CONFIG" "$H_CHANGED" "change"
+assert_jq "$LAST_REPORT" '.success == true' "changed config applied"
+effective="$(query_json config)" || die "could not query /config"
+assert_jq "$effective" "$CHANGED_FILTER" "effective config shows the changed values in every section"
+ok "changed config: every section flipped (icons, transparency, search bar, dock, widgets, clock)"
+
+settle_then_broadcast "$VALID_CONFIG" "$H_VALID" "change-back"
+assert_jq "$LAST_REPORT" '.success == true' "original config re-applied"
+effective="$(query_json config)" || die "could not query /config"
+assert_jq "$effective" "$EFFECTIVE_FILTER" "effective config is back to the original values"
+ok "change back: every section restored"
+
+# Which sections a change touches is only visible on the reload that did the
+# work, and the broadcast after settle is a no-op by design. So write the
+# changed config once more and read the watcher's own report, the one reload
+# that applied it.
+write_config "$CHANGED_CONFIG"
+wait_report ".success == true and .configSha256 == \"$H_CHANGED\" and ((.appliedMutations // []) | length) > 0" 30 \
+  "the reload that applied the changed config"
+assert_jq "$LAST_REPORT" "$ALL_SECTIONS_FILTER" "the applying reload lists every changed section"
+ok "applied sections reported: $(jq -c '.appliedMutations' <<<"$LAST_REPORT")"
+settle_then_broadcast "$VALID_CONFIG" "$H_VALID" "change-back-2"
+
+# --- 7. malformed JSON: failed report, state intact --------------------
 
 settle_then_broadcast "$MALFORMED_CONFIG" "$H_MALFORMED" "malformed"
 assert_jq "$LAST_REPORT" \
@@ -337,7 +418,7 @@ effective="$(query_json config)" || die "could not query /config"
 assert_jq "$effective" "$EFFECTIVE_FILTER" "effective config intact after malformed push"
 ok "previous effective config intact"
 
-# --- 7. unknown keys: warnings, successful apply -----------------------
+# --- 8. unknown keys: warnings, successful apply -----------------------
 
 settle_then_broadcast "$UNKNOWN_KEYS_CONFIG" "$H_UNKNOWN" "unknown-keys"
 assert_jq "$LAST_REPORT" \
@@ -349,7 +430,7 @@ effective="$(query_json config)" || die "could not query /config"
 assert_jq "$effective" "$EFFECTIVE_FILTER" "effective config unchanged by unknown keys"
 ok "effective config unchanged (unknown keys ignored)"
 
-# --- 8. restore a valid config via adb push (interactive dotfile path) ---
+# --- 9. restore a valid config via adb push (interactive dotfile path) ---
 
 push_config "$VALID_CONFIG"
 log "restore: waiting for file-watcher reload of the pushed file (hash ${H_VALID:0:12}...)"
