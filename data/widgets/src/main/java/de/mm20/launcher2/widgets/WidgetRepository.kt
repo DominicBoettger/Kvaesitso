@@ -21,6 +21,14 @@ interface WidgetRepository: Backupable {
     fun delete(widget: Widget)
     fun set(widgets: List<Widget>, parentId: UUID? = null)
 
+    /**
+     * Fork addition (Phase 2 config reload, ADR 0003): awaited variant of [set].
+     * Replaces all widgets under [parentId] in a single transaction and returns
+     * only after it has committed, so the new widget set is visible immediately
+     * afterwards. List order is preserved (ascending position).
+     */
+    suspend fun setAwaited(widgets: List<Widget>, parentId: UUID? = null)
+
     fun exists(type: String): Flow<Boolean>
     fun count(type: String): Flow<Int>
 }
@@ -64,18 +72,27 @@ internal class WidgetRepositoryImpl(
     }
 
     override fun set(widgets: List<Widget>, parentId: UUID?) {
-        val dao = database.widgetDao()
         scope.launch {
-            database.withTransaction {
-                if (parentId == null) {
-                    dao.deleteRoot()
-                } else {
-                    dao.deleteByParent(parentId)
-                }
-                dao.insert(widgets.mapIndexed { index, widget ->
-                    widget.toDatabaseEntity(position = index, parentId = parentId)
-                })
+            setInternal(widgets, parentId)
+        }
+    }
+
+    // Fork addition (Phase 2 config reload): awaited variant, see interface.
+    override suspend fun setAwaited(widgets: List<Widget>, parentId: UUID?) {
+        setInternal(widgets, parentId)
+    }
+
+    private suspend fun setInternal(widgets: List<Widget>, parentId: UUID?) {
+        val dao = database.widgetDao()
+        database.withTransaction {
+            if (parentId == null) {
+                dao.deleteRoot()
+            } else {
+                dao.deleteByParent(parentId)
             }
+            dao.insert(widgets.mapIndexed { index, widget ->
+                widget.toDatabaseEntity(position = index, parentId = parentId)
+            })
         }
     }
 

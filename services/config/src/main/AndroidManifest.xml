@@ -1,0 +1,20 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Explicit adb trigger; the shell user can target non-exported components. -->
+        <receiver
+            android:name=".ReloadConfigReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="${applicationId}.action.RELOAD_CONFIG" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Read-only read-back provider, no permission (ADR 0003). -->
+        <provider
+            android:name=".ConfigStateProvider"
+            android:authorities="${applicationId}.state"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+    </application>
+</manifest>

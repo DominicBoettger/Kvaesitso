@@ -11,6 +11,8 @@ import de.mm20.launcher2.backup.backupModule
 import de.mm20.launcher2.badges.badgesModule
 import de.mm20.launcher2.calculator.calculatorModule
 import de.mm20.launcher2.calendar.calendarModule
+// Fork addition (Phase 2, ADR 0003): config convergence services
+import de.mm20.launcher2.config.service.configModule
 import de.mm20.launcher2.contacts.contactsModule
 import de.mm20.launcher2.data.customattrs.customAttrsModule
 import de.mm20.launcher2.data.i18nDataModule
@@ -70,6 +72,7 @@ class LauncherApplication : Application(), CoroutineScope, ImageLoaderFactory {
                     calculatorModule,
                     badgesModule,
                     calendarModule,
+                    configModule, // Fork addition (Phase 2)
                     contactsModule,
                     customAttrsModule,
                     databaseModule,

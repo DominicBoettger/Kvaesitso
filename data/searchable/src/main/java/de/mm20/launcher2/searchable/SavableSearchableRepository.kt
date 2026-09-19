@@ -106,6 +106,19 @@ interface SavableSearchableRepository : Backupable {
     )
 
     /**
+     * Fork addition (Phase 2 config reload, ADR 0003): awaited variant of
+     * [updateFavorites]. Runs the same transaction (unpin all, then re-pin) but
+     * returns only after it has committed, so the caller can rely on the new
+     * favorites being visible immediately afterwards. [manuallySorted] keeps its
+     * order (first item ends up on top), making it suitable for ordered,
+     * config-managed dock favorites.
+     */
+    suspend fun updateFavoritesAwaited(
+        manuallySorted: List<SavableSearchable>,
+        automaticallySorted: List<SavableSearchable>,
+    )
+
+    /**
      * Returns the given keys sorted by relevance.
      * The first item in the list is the most relevant.
      * Unknown keys will not be included in the result.
@@ -135,9 +148,12 @@ interface SavableSearchableRepository : Backupable {
     suspend fun cleanupDatabase(): Int
 }
 
+// Fork edit (Phase 2): `settings` is nullable so headless unit tests can construct
+// the repository without a RankingSettings instance (its constructor is internal to
+// :core:preferences). touch() falls back to the medium weight factor when it is null.
 internal class SavableSearchableRepositoryImpl(
     private val database: AppDatabase,
-    private val settings: RankingSettings,
+    private val settings: RankingSettings?,
 ) : SavableSearchableRepository, KoinComponent {
 
     private val scope = CoroutineScope(Job() + Dispatchers.Default)
@@ -211,7 +227,7 @@ internal class SavableSearchableRepositoryImpl(
     override fun touch(searchable: SavableSearchable) {
         scope.launch {
             val weightFactor =
-                when (settings.weightFactor.firstOrNull()) {
+                when (settings?.weightFactor?.firstOrNull()) {
                     WeightFactor.Low -> WEIGHT_FACTOR_LOW
                     WeightFactor.High -> WEIGHT_FACTOR_HIGH
                     else -> WEIGHT_FACTOR_MEDIUM
@@ -356,33 +372,48 @@ internal class SavableSearchableRepositoryImpl(
         manuallySorted: List<SavableSearchable>,
         automaticallySorted: List<SavableSearchable>
     ) {
-        val dao = database.searchableDao()
         scope.launch {
-            database.withTransaction {
-                dao.unpinAll()
-                dao.upsert(
-                    manuallySorted.mapIndexedNotNull { index, savableSearchable ->
-                        SavedSearchableUpdatePinEntity(
-                            key = savableSearchable.key,
-                            type = savableSearchable.domain,
-                            pinPosition = manuallySorted.size - index + 1,
-                            serializedSearchable = savableSearchable.serialize()
-                                ?: return@mapIndexedNotNull null,
-                        )
-                    }
-                )
-                dao.upsert(
-                    automaticallySorted.mapNotNull { savableSearchable ->
-                        SavedSearchableUpdatePinEntity(
-                            key = savableSearchable.key,
-                            type = savableSearchable.domain,
-                            pinPosition = 1,
-                            serializedSearchable = savableSearchable.serialize()
-                                ?: return@mapNotNull null,
-                        )
-                    }
-                )
-            }
+            updateFavoritesInternal(manuallySorted, automaticallySorted)
+        }
+    }
+
+    // Fork addition (Phase 2 config reload): awaited variant, see interface.
+    override suspend fun updateFavoritesAwaited(
+        manuallySorted: List<SavableSearchable>,
+        automaticallySorted: List<SavableSearchable>
+    ) {
+        updateFavoritesInternal(manuallySorted, automaticallySorted)
+    }
+
+    private suspend fun updateFavoritesInternal(
+        manuallySorted: List<SavableSearchable>,
+        automaticallySorted: List<SavableSearchable>
+    ) {
+        val dao = database.searchableDao()
+        database.withTransaction {
+            dao.unpinAll()
+            dao.upsert(
+                manuallySorted.mapIndexedNotNull { index, savableSearchable ->
+                    SavedSearchableUpdatePinEntity(
+                        key = savableSearchable.key,
+                        type = savableSearchable.domain,
+                        pinPosition = manuallySorted.size - index + 1,
+                        serializedSearchable = savableSearchable.serialize()
+                            ?: return@mapIndexedNotNull null,
+                    )
+                }
+            )
+            dao.upsert(
+                automaticallySorted.mapNotNull { savableSearchable ->
+                    SavedSearchableUpdatePinEntity(
+                        key = savableSearchable.key,
+                        type = savableSearchable.domain,
+                        pinPosition = 1,
+                        serializedSearchable = savableSearchable.serialize()
+                            ?: return@mapNotNull null,
+                    )
+                }
+            )
         }
     }
 

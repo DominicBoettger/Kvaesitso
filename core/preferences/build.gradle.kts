@@ -53,6 +53,7 @@ dependencies {
     api(libs.androidx.datastore)
     implementation(libs.koin.android)
 
+    implementation(project(":core:config"))
     implementation(project(":core:ktx"))
     implementation(project(":core:i18n"))
     implementation(project(":core:base"))

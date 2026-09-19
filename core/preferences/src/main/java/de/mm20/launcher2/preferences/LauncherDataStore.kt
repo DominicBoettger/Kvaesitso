@@ -31,4 +31,10 @@ internal class LauncherDataStore(
     fun update(block: (LauncherSettingsData) -> LauncherSettingsData) {
         updateData(block)
     }
+
+    // Fork addition (Phase 2): awaited write for config reload; the write is
+    // visible via [data] immediately after this function returns.
+    suspend fun updateAndAwait(block: (LauncherSettingsData) -> LauncherSettingsData): LauncherSettingsData {
+        return updateDataAndAwait(block)
+    }
 }
